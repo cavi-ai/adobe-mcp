@@ -220,6 +220,10 @@ class NativeFixture:
                 "state": copy.deepcopy(self.state), "result": {"status": "fixture"}}
 
 
+# Exclusive project publication uses macOS filesystem calls.
+MACOS_ONLY = unittest.skipUnless(sys.platform == "darwin", "needs macOS")
+
+
 class CharacterOwnershipTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -235,6 +239,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         observed = self.client.inspect()
         return self.client.session("claim", "fixture", observed["project_id"])
 
+    @MACOS_ONLY
     def test_prepare_closed_copy_open_exact_root_and_claim_inode_ownership(self):
         source = self.closed_character_project()
         result = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
@@ -261,6 +266,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         stored_lease = self.client.read("lease.json")
         self.assertEqual(stored_lease["owned_root_identity"], self.client._directory_identity(destination))
 
+    @MACOS_ONLY
     def test_claim_resolves_only_the_matching_unknown_prepared_open_without_replaying(self):
         self.closed_character_project()
         prepared = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
@@ -286,6 +292,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         archived = self.client.read("operations/" + packet["operation_id"] + ".json")
         self.assertEqual(archived["resolution"], "prepared_copy_open_verified")
 
+    @MACOS_ONLY
     def test_prepared_copy_claim_rejects_changed_process_root_or_inode(self):
         source = self.closed_character_project()
         prepared = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
@@ -341,6 +348,7 @@ class CharacterOwnershipTests(unittest.TestCase):
             self.client.prepare_copy("ClosedProject", "copies/SymlinkSource")
         self.assertFalse((self.root / "workspace/copies/SymlinkSource").exists())
 
+    @MACOS_ONLY
     def test_prepare_closed_copy_rejects_source_changes_and_never_adopts_unreceipted_copy(self):
         source = self.closed_character_project()
         original_copytree = shutil.copytree
@@ -378,6 +386,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         with self.assertRaisesRegex(CharacterRejected, "no verified private copy receipt"):
             self.client.session("claim", "fixture", observed["project_id"], prepared_copy_id=fixed_id)
 
+    @MACOS_ONLY
     def test_prepare_copy_preserves_destination_created_at_exclusive_publish(self):
         self.closed_character_project()
         destination = (self.root / "workspace/copies/RaceDestination").resolve()
@@ -402,6 +411,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(list((self.root / "workspace/copies").glob(".RaceDestination.prepare-*")), [])
         self.assertEqual(list((self.client.directory / "prepared-copies").glob("*.json")), [])
 
+    @MACOS_ONLY
     def test_prepare_copy_reports_post_publish_verification_failure_as_unknown(self):
         self.closed_character_project()
         destination = (self.root / "workspace/copies/PublishedCopy").resolve()
