@@ -93,6 +93,13 @@ For an unknown operation on a first-hand owned project, `operation_control(actio
 archives the operation after two stable observations confirm that its original process and all Character Animator
 instances have exited. The operation remains recorded as unknown; project and media files are preserved.
 
+If Character Animator has exited and no operation is pending, release the original lease with
+`session_control(action="release", lease_id=...)`. The server verifies stable process absence
+and the unchanged owned project folder before removing the lease.
+
+Interrupted native chooser calls retain bounded attempt diagnostics under `CAVI_ADOBE_DATA`.
+These diagnostics do not establish completion or authorize a retry.
+
 ## Development
 
 ```sh
