@@ -31,11 +31,13 @@ class NativeFixture:
                       "project_roots": [str(root / "original")], "fingerprint": "initial"}
         self.state["windows"] = []
         self.calls = []
+        self.last_continue_chooser_parameters = None
         self.fail = False
         self.directory_transition = False
         self.fail_submit = False
         self.import_directory_pending = False
         self.fail_import_before_envelope = False
+        self.fail_continue_import_unknown = False
         self.fail_import_focus_dispatch = False
         self.fail_import_generic_no_menu = False
         self.fail_export_submit = False
@@ -164,6 +166,26 @@ class NativeFixture:
                 self.state["fingerprint"] = "cancelled"
                 self.state["focused_window"] = None
                 self.state["windows"] = []
+        if operation == "continue_chooser":
+            self.last_continue_chooser_parameters = copy.deepcopy(parameters or {})
+            kind = (parameters or {}).get("kind")
+            if kind == "export_png_wav" and self.fail_export_destination:
+                raise CharacterRejected("Fixture pre-dispatch export state changed", "STALE_STATE")
+            if ((kind == "export_png_wav" and self.fail_export_submit)
+                    or (kind == "import" and self.fail_continue_import_unknown)):
+                raise CharacterUnknown("Fixture atomic import continuation timed out")
+            if kind == "import" and self.import_directory_pending:
+                return {"version": 1, "ok": True, "operation": operation,
+                        "state": copy.deepcopy(self.state),
+                        "result": {"status": "native_directory_requested", "completion": "unverified"}}
+            self.state.update(frontmost=True, fingerprint="import-submitted",
+                              focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                              "title": "Adobe Character Animator 2026"},
+                              windows=[])
+            return {"version": 1, "ok": True, "operation": operation,
+                    "state": copy.deepcopy(self.state),
+                    "result": {"status": "native_chooser_submitted", "completion": "unverified",
+                               "retry_safe": False}}
         if operation == "import":
             if self.fail_import_focus_dispatch or self.fail_import_generic_no_menu:
                 self.state["fingerprint"] = "main-window"
@@ -179,8 +201,9 @@ class NativeFixture:
                 self.state.update(frontmost=False, fingerprint="background-main",
                                   focused_window={"identifier": "main-window", "role": "AXLayoutArea",
                                                   "title": "Character Animator"},
-                                  windows=[{"identifier": "main-window", "role": "AXWindow",
-                                            "title": "Character Animator", "modal": False}])
+                                  windows=[{"identifier": "open-panel", "title": "Import", "modal": True},
+                                           {"identifier": "main-window", "role": "AXLayoutArea",
+                                            "title": "Adobe Character Animator 2026", "modal": False}])
             if self.fail_import_before_envelope:
                 raise CharacterUnknown("Fixture timeout before native response envelope")
         if operation == "chooser_destination" and parameters.get("kind") == "import":
@@ -788,8 +811,11 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(staged.name, source.name)
         self.assertEqual(staged.parent.parent.name, "inputs")
         self.assertEqual(staged.read_bytes(), source.read_bytes())
+        self.assertEqual(self.native.last_continue_chooser_parameters["expected_sha256"],
+                         result["source"]["sha256"])
         self.assertEqual(self.native.calls[len(before_import):].count("import"), 1)
-        self.assertEqual(self.native.calls[len(before_import):].count("chooser_destination"), 1)
+        self.assertEqual(self.native.calls[len(before_import):].count("chooser_destination"), 0)
+        self.assertEqual(self.native.calls[len(before_import):].count("continue_chooser"), 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
     def test_import_adopts_exact_existing_import_chooser_without_menu_replay(self):
@@ -810,9 +836,9 @@ class CharacterOwnershipTests(unittest.TestCase):
         result = self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
-        self.assertEqual(self.native.calls[len(calls_before):].count("focus"), 1)
+        self.assertEqual(self.native.calls[len(calls_before):].count("continue_chooser"), 1)
         self.assertEqual(self.native.calls[len(calls_before):].count("import"), 0)
-        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 1)
+        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 0)
         archived = self.client.read("operations/" + result["operation_id"] + ".json")
         self.assertEqual(archived["initial_native_operation"], "inspect_existing_import")
 
@@ -833,7 +859,8 @@ class CharacterOwnershipTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(self.native.calls[len(calls_before):].count("import"), 0)
-        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_continue_directory"), 1)
+        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_continue_directory"), 0)
+        self.assertEqual(self.native.calls[len(calls_before):].count("continue_chooser"), 1)
 
     def test_import_rejects_unparented_go_to_sheet(self):
         lease = self.claim()
@@ -879,12 +906,16 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(result["expected_output_directory"],
                          str(self.client.path("exports/talk/SignalTalk")))
         self.assertTrue((self.root / "workspace/exports/talk").is_dir())
+        archived = self.client.read("operations/" + result["operation_id"] + ".json")
+        self.assertEqual(self.native.last_continue_chooser_parameters["output_directory_identity"],
+                         archived["intent"]["output_directory_identity"])
         self.assertEqual(self.native.calls[len(calls_before):].count("export_png_wav"), 1)
-        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 1)
-        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_continue_directory"), 2)
+        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 0)
+        self.assertEqual(self.native.calls[len(calls_before):].count("chooser_continue_directory"), 0)
+        self.assertEqual(self.native.calls[len(calls_before):].count("continue_chooser"), 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
-    def test_continue_export_resumes_exact_unknown_export_chooser_without_menu_replay(self):
+    def test_continue_export_never_retries_uncertain_atomic_dispatch(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         (self.root / "workspace/exports").mkdir()
@@ -896,44 +927,15 @@ class CharacterOwnershipTests(unittest.TestCase):
         packet = self.client.inspect()["pending_operation"]
         self.assertEqual(packet["operation"], "export_png_wav")
         operation_id = packet["operation_id"]
-        self.assertEqual(packet["last_command"], "chooser_continue_directory")
-        self.assertEqual(packet["native"]["result"]["status"], "native_directory_requested")
+        self.assertTrue(packet["atomic_continuation_attempted"])
+        atomic_calls = self.native.calls.count("continue_chooser")
         self.native.fail_export_submit = False
-        self.native.state.update(frontmost=False, fingerprint="background-resume",
-                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                 "title": "Character Animator"},
-                                 windows=[{"identifier": "main-window", "role": "AXWindow",
-                                           "title": "Character Animator", "modal": False}])
-        parent = {"frontmost": True,
-                  "focused_window": {"identifier": "save-panel", "title": "Export Scene", "modal": True},
-                  "windows": [{"identifier": "save-panel", "title": "Export Scene", "modal": True}]}
-        go_to = {"frontmost": True,
-                 "focused_window": {"identifier": "GoToWindow", "role": "AXSheet", "modal": True},
-                 "windows": [{"identifier": "save-panel", "title": "Export Scene", "modal": True},
-                             {"identifier": "GoToWindow", "role": "AXSheet", "modal": True}]}
-        self.native.export_inspect_states = [
-            {**parent, "fingerprint": "export-parent-initial", "windows": [*parent["windows"],
-                 {"identifier": "main-window", "title": "Character Animator"}]},
-            {**go_to, "fingerprint": "export-go-to-transition"},
-            {**parent, "fingerprint": "export-parent-settled"},
-            {**parent, "fingerprint": "export-parent-settled"},
-        ]
-        destinations_before = self.native.calls.count("chooser_destination")
-        continues_before = self.native.calls.count("chooser_continue_directory")
-        calls_before = len(self.native.calls)
 
-        result = self.client.operation_control("continue_export", operation_id, lease["lease_id"])
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_export", operation_id, lease["lease_id"])
 
-        self.assertEqual(result["status"], "native_export_submitted")
-        self.assertEqual(result["completion"], "unverified")
-        self.assertEqual(self.native.calls.count("export_png_wav"), 1)
-        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before)
-        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continues_before + 1)
-        self.assertEqual(self.native.calls[calls_before:][:5], ["inspect", "inspect", "inspect",
-                                                               "inspect", "chooser_continue_directory"])
-        self.assertIsNone(self.client.inspect()["pending_operation"])
-        archived = self.client.read("operations/" + operation_id + ".json")
-        self.assertEqual(archived["resolution"], "continue_export")
+        self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls)
+        self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], operation_id)
 
     def test_continue_export_rejects_changed_process_or_source_before_dispatch(self):
         lease = self.claim()
@@ -981,13 +983,15 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.fail_export_destination = False
         destinations_before = self.native.calls.count("chooser_destination")
         continuations_before = self.native.calls.count("chooser_continue_directory")
+        atomic_before = self.native.calls.count("continue_chooser")
         result = self.client.operation_control("continue_export", packet["operation_id"],
                                                lease["lease_id"])
 
         self.assertEqual(result["status"], "native_export_submitted")
         self.assertEqual(self.native.calls.count("export_png_wav"), 1)
-        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before + 1)
-        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continuations_before + 2)
+        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before)
+        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continuations_before)
+        self.assertEqual(self.native.calls.count("continue_chooser"), atomic_before + 1)
 
     def test_cancel_unsubmitted_can_cancel_exact_export_panel(self):
         lease = self.claim()
@@ -999,9 +1003,6 @@ class CharacterOwnershipTests(unittest.TestCase):
         with self.assertRaises(CharacterUnknown):
             self.client.scene_export("exports/talk", "SignalTalk", fingerprint, lease["lease_id"])
         packet = self.client.inspect()["pending_operation"]
-        packet["intent"].pop("output_directory_identity")
-        write_json(self.client.directory / "operation.json", packet)
-
         result = self.client.operation_control("cancel_unsubmitted", packet["operation_id"],
                                                lease["lease_id"])
 
@@ -1076,18 +1077,14 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(pending["state"], "unknown")
         self.assertEqual(self.native.calls.count("import"), 1)
         operation_id = pending["operation_id"]
+        self.assertTrue(pending["atomic_continuation_attempted"])
+        atomic_calls = self.native.calls.count("continue_chooser")
         self.native.import_directory_pending = False
-        self.native.state.update(frontmost=False, fingerprint="background-resume",
-                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                 "title": "Character Animator"},
-                                 windows=[{"identifier": "main-window", "role": "AXWindow",
-                                           "title": "Character Animator", "modal": False}])
-        resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
-        self.assertEqual(resumed["status"], "native_import_submitted")
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_import", operation_id, lease["lease_id"])
         self.assertEqual(self.native.calls.count("import"), 1)
-        self.assertIsNone(self.client.inspect()["pending_operation"])
-        self.assertEqual(self.client.read("operations/" + operation_id + ".json")["resolution"],
-                         "continue_import")
+        self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls)
+        self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], operation_id)
 
     def test_import_recovers_unknown_without_native_envelope_from_exact_live_chooser(self):
         lease = self.claim()
@@ -1107,14 +1104,16 @@ class CharacterOwnershipTests(unittest.TestCase):
         operation_id = pending["operation_id"]
 
         self.native.fail_import_before_envelope = False
+        atomic_calls = self.native.calls.count("continue_chooser")
         resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(resumed["status"], "native_import_submitted")
         self.assertEqual(self.native.calls.count("import"), 1)
-        self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import + 1)
+        self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import)
+        self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
-    def test_continue_import_waits_for_stable_exact_chooser_after_transient_focus(self):
+    def test_continue_import_uses_one_native_request_for_background_existing_chooser(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
@@ -1124,27 +1123,61 @@ class CharacterOwnershipTests(unittest.TestCase):
         packet = self.client.inspect()["pending_operation"]
         operation_id = packet["operation_id"]
         self.native.fail_import_before_envelope = False
-        self.native.import_inspect_states = [
-            {"fingerprint": "import-panel", "frontmost": True,
-             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
-             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
-            {"fingerprint": "temporary-main", "frontmost": True,
-             "focused_window": {"identifier": "main-window", "role": "AXLayoutArea",
-                                "title": "Character Animator"}, "windows": []},
-            {"fingerprint": "import-ready", "frontmost": True,
-             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
-             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
-            {"fingerprint": "import-ready", "frontmost": True,
-             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
-             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
-        ]
         import_calls = self.native.calls.count("import")
+        atomic_calls = self.native.calls.count("continue_chooser")
+        self.native.state.update(frontmost=False, fingerprint="background-import",
+                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Adobe Character Animator 2026"},
+                                 windows=[{"identifier": "open-panel", "title": "Import", "modal": True},
+                                          {"identifier": "main-window", "role": "AXLayoutArea",
+                                           "title": "Adobe Character Animator 2026", "modal": False}])
 
         result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(self.native.calls.count("import"), import_calls)
+        self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_continue_import_never_retries_uncertain_atomic_dispatch(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        self.native.fail_import_before_envelope = False
+        self.native.fail_continue_import_unknown = True
+        calls_before = self.native.calls.count("continue_chooser")
+
+        with self.assertRaises(CharacterUnknown):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+        retained = self.client.inspect()["pending_operation"]
+        self.assertTrue(retained["atomic_continuation_attempted"])
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+        self.assertEqual(self.native.calls.count("continue_chooser"), calls_before + 1)
+
+    def test_continue_import_rejects_changed_process_before_native_dispatch(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        self.native.fail_import_before_envelope = False
+        self.native.state.update(pid=43, launch_time="replacement-process")
+        calls_before = self.native.calls.count("continue_chooser")
+
+        with self.assertRaisesRegex(CharacterRejected, "process changed"):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.native.calls.count("continue_chooser"), calls_before)
+        retained = self.client.inspect()["pending_operation"]
+        self.assertEqual(retained["operation_id"], pending["operation_id"])
+        self.assertEqual(retained["state"], "unknown")
 
     def test_continue_import_rejects_unparented_go_to_modal_under_import_focus(self):
         lease = self.claim()

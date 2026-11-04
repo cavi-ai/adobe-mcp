@@ -871,6 +871,138 @@ final class Observation {
         try perform(try node(ready, identifier: "OKButton", role: "AXButton"))
         return ["status": "native_chooser_submitted", "destination": destination.path, "completion": "unverified", "retry_safe": false]
     }
+    func continueChooser(_ initial: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+        phase = "chooser_continue_preflight"
+        guard let directory = parameters["directory"] as? String,
+              let basename = parameters["basename"] as? String,
+              let kind = parameters["kind"] as? String,
+              ["import", "export_png_wav"].contains(kind),
+              let app = initial.application,
+              typedChooserIsObserved(initial, kind: kind),
+              hasOnlyExpectedChooserModal(initial, kind: kind),
+              initial.state["authentication_or_permission_prompt"] as? Bool != true else {
+            try fail("CHOOSER_MISMATCH", "Continue requires the exact existing typed chooser without an unrelated modal or prompt")
+        }
+        let originalPID = app.processIdentifier
+        let originalLaunch = initial.state["launch_time"] as? Double
+        try ownedRoot(parameters, initial)
+        let targetDirectory = URL(fileURLWithPath: directory).standardizedFileURL
+        let target = targetDirectory.appendingPathComponent(basename)
+        guard targetDirectory.path == directory,
+              targetDirectory.resolvingSymlinksInPath() == targetDirectory,
+              target.resolvingSymlinksInPath() == target,
+              FileManager.default.fileExists(atPath: target.path) == (kind == "import") else {
+            try fail("INVALID_DESTINATION", "The requested chooser file must match its existing-input or new-output state")
+        }
+        if kind == "export_png_wav" {
+            try verifyExportDirectory(parameters, directory: targetDirectory, basename: basename)
+        }
+
+        func verify(_ current: Observation) throws {
+            try ownedRoot(parameters, current)
+            guard current.application?.processIdentifier == originalPID,
+                  (current.state["launch_time"] as? Double) == originalLaunch,
+                  current.state["authentication_or_permission_prompt"] as? Bool != true,
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,
+                  hasOnlyExpectedChooserModal(current, kind: kind) else {
+                try fail("CHOOSER_MISMATCH", "The same owned process and typed chooser must remain active without a prompt")
+            }
+        }
+        func isDirectoryReady(_ current: Observation) -> Bool {
+            guard typedChooserIsFocused(current, kind: kind),
+                  let whereNode = current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" }),
+                  whereNode.1["value"] as? String == targetDirectory.lastPathComponent,
+                  (whereNode.1["url"] as? String).flatMap(URL.init(string:)).map({ $0.standardizedFileURL.path == directory }) ?? false else { return false }
+            if kind == "export_png_wav" {
+                return true
+            }
+            return current.nodes.contains {
+                text($0.0, "AXValue") == basename && text($0.0, "AXRole") == "AXTextField"
+                    && (attribute($0.0, "AXURL") as? URL)?.standardizedFileURL == target
+                    && bool($0.0, "AXSelected") == true
+            }
+        }
+        func settle(_ ready: (Observation) -> Bool) async throws -> Observation {
+            let deadline = ProcessInfo.processInfo.systemUptime + 5
+            var previous: String?
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                try Task.checkCancellation()
+                let current = try observe()
+                try verify(current)
+                let fingerprint = current.state["fingerprint"] as? String
+                if ready(current), let fingerprint, fingerprint == previous { return current }
+                previous = ready(current) ? fingerprint : nil
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            try fail("CHOOSER_UNAVAILABLE", "The exact typed chooser did not reach the requested observed state")
+        }
+
+        var current = initial
+        if !isDirectoryReady(current) {
+            if current.focusedWindow.map({ text($0, "AXIdentifier") }) != "GoToWindow" {
+                let opened = try await chooserDestination(current, parameters: parameters)
+                guard opened["status"] as? String == "native_chooser_directory_requested" else {
+                    try fail("CHOOSER_MISMATCH", "Chooser directory navigation did not reach its recorded stage")
+                }
+                current = try await settle { typedChooserIsFocused($0, kind: kind) }
+            }
+            if !isDirectoryReady(current) {
+                guard current.focusedWindow.map({ text($0, "AXIdentifier") }) == "GoToWindow" else {
+                    try fail("CHOOSER_MISMATCH", "The exact typed chooser or its parented Go To sheet is required")
+                }
+                _ = try await continueDirectoryEntry(current, parameters: parameters)
+                current = try await settle(isDirectoryReady)
+            }
+        }
+        guard isDirectoryReady(current) else {
+            try fail("INPUT_NOT_OBSERVED", "The requested file or export filename is not observed in the exact folder")
+        }
+        let result = try await continueDirectoryEntry(current, parameters: parameters)
+        guard result["status"] as? String == "native_chooser_submitted" else {
+            try fail("CHOOSER_NOT_SUBMITTED", "The exact observed chooser destination was not submitted")
+        }
+        return result
+    }
+
+    func verifyExportDirectory(_ parameters: [String: Any], directory: URL, basename: String) throws {
+        guard let identity = parameters["output_directory_identity"] as? [String: Any],
+              let device = (identity["device"] as? NSNumber)?.int64Value,
+              let inode = (identity["inode"] as? NSNumber)?.int64Value,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: directory.path),
+              attributes[.type] as? FileAttributeType == .typeDirectory,
+              attributes[.systemNumber] as? NSNumber == NSNumber(value: device),
+              attributes[.systemFileNumber] as? NSNumber == NSNumber(value: inode),
+              !FileManager.default.fileExists(atPath: directory.appendingPathComponent(basename).path),
+              !FileManager.default.fileExists(atPath: directory.appendingPathComponent(basename + ".xml").path) else {
+            try fail("DESTINATION_CHANGED", "The journaled export directory or new output targets changed")
+        }
+    }
+    func verifyTopmostChooser(_ observation: Observation, window: AXUIElement) throws {
+        guard let app = observation.application,
+              let focused = observation.focusedWindow, CFEqual(focused, window),
+              let f = frame(window),
+              observation.state["authentication_or_permission_prompt"] as? Bool != true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+            try fail("FOCUS_CHANGED", "The exact foreground chooser is required immediately before submission")
+        }
+        let expectedFrame = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+        let serverWindows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                        kCGNullWindowID) as? [[String: Any]] ?? []
+        guard let top = serverWindows.first(where: { item in
+                  if item[kCGWindowOwnerName as String] as? String == "Window Server",
+                     item[kCGWindowLayer as String] as? Int == Int(CGWindowLevelForKey(.cursorWindow)) { return false }
+                  guard (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                        let bounds = item[kCGWindowBounds as String] as? [String: Any],
+                        let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
+                  return rect.intersects(expectedFrame)
+              }), top[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
+              let bounds = top[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+              abs(rect.minX - f[0]) <= 2, abs(rect.minY - f[1]) <= 2,
+              abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2 else {
+            try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window")
+        }
+    }
     func continueDirectoryEntry(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
         var observation = observation
         phase = "directory_resume_preflight"
@@ -1054,7 +1186,49 @@ final class Observation {
                 guard text(button, "AXTitle") == "Import", bool(button, "AXEnabled") == true else {
                     try fail("INPUT_NOT_OBSERVED", "Native import selection did not enable its observed Import control")
                 }
-                try perform(button)
+                guard let expectedHash = parameters["expected_sha256"] as? String,
+                      expectedHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                      let attributesBefore = try? FileManager.default.attributesOfItem(atPath: selectedURL.path),
+                      attributesBefore[.type] as? FileAttributeType == .typeRegular,
+                      (try? selectedURL.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+                      let expectedSize = (attributesBefore[.size] as? NSNumber)?.intValue,
+                      let bytes = try? Data(contentsOf: selectedURL, options: [.mappedIfSafe]),
+                      let attributesAfter = try? FileManager.default.attributesOfItem(atPath: selectedURL.path),
+                      attributesBefore[.systemNumber] as? NSNumber == attributesAfter[.systemNumber] as? NSNumber,
+                      attributesBefore[.systemFileNumber] as? NSNumber == attributesAfter[.systemFileNumber] as? NSNumber,
+                      attributesBefore[.size] as? NSNumber == attributesAfter[.size] as? NSNumber,
+                      attributesBefore[.modificationDate] as? Date == attributesAfter[.modificationDate] as? Date,
+                      bytes.count == expectedSize,
+                      sha(bytes) == expectedHash else {
+                    try fail("INPUT_CHANGED", "The selected import copy no longer matches its retained SHA-256")
+                }
+                guard selected.application?.processIdentifier == app.processIdentifier,
+                      selected.state["authentication_or_permission_prompt"] as? Bool != true,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                      selected.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""] else {
+                    try fail("PRECONDITION_CHANGED", "The same foreground process and owned project are required immediately before Import")
+                }
+                let submitReady = try observe()
+                guard submitReady.state["fingerprint"] as? String == selected.state["fingerprint"] as? String,
+                      submitReady.application?.processIdentifier == app.processIdentifier,
+                      submitReady.state["authentication_or_permission_prompt"] as? Bool != true,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                      submitReady.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""],
+                      (try? panel(submitReady, kind: "import")) != nil else {
+                    try fail("PRECONDITION_CHANGED", "The exact selected Import panel changed during source verification")
+                }
+                let readyButton = try node(submitReady, identifier: "OKButton", role: "AXButton")
+                guard text(readyButton, "AXTitle") == "Import", bool(readyButton, "AXEnabled") == true else {
+                    try fail("PRECONDITION_CHANGED", "The observed Import control changed during source verification")
+                }
+                let stillSelected = submitReady.nodes.contains {
+                    text($0.0, "AXValue") == basename && text($0.0, "AXRole") == "AXTextField"
+                        && (attribute($0.0, "AXURL") as? URL)?.standardizedFileURL == selectedURL
+                        && bool($0.0, "AXSelected") == true
+                }
+                guard stillSelected else { try fail("INPUT_NOT_OBSERVED", "The retained import file selection changed before submission") }
+                try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import"))
+                try perform(readyButton)
                 return ["status": "native_chooser_submitted", "destination": selectedURL.path,
                         "completion": "unverified", "retry_safe": false]
             }
@@ -1076,6 +1250,10 @@ final class Observation {
             guard text(saveButton, "AXTitle") == "Save", bool(saveButton, "AXEnabled") == true else {
                 try fail("PRECONDITION_CHANGED", "Observed Save button is disabled or changed")
             }
+            if kind == "export_png_wav" {
+                try verifyExportDirectory(parameters, directory: directoryURL, basename: basename)
+            }
+            try verifyTopmostChooser(ready, window: try panel(ready, kind: kind))
             phase = "save_dispatch"
             try perform(saveButton)
             return ["status": "native_chooser_submitted", "destination": directoryURL.appendingPathComponent(basename).path,
@@ -1233,6 +1411,10 @@ final class Observation {
         }
         if operation == "chooser_continue_directory" {
             let result = try await continueDirectoryEntry(observation, parameters: parameters)
+            return ["state": try observe().state, "result": result]
+        }
+        if operation == "continue_chooser" {
+            let result = try await continueChooser(observation, parameters: parameters)
             return ["state": try observe().state, "result": result]
         }
         if operation == "focus" {
