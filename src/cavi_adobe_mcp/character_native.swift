@@ -1134,9 +1134,11 @@ final class Observation {
             for _ in 0..<15 {
                 try await Task.sleep(nanoseconds: 100_000_000)
                 let current = try observe()
-                guard current.state["authentication_or_permission_prompt"] as? Bool != true,
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
-                    try fail("AUTHENTICATION_BOUNDARY", "A prompt or foreground change interrupted Go To focus")
+                guard current.state["authentication_or_permission_prompt"] as? Bool != true else {
+                    try fail("AUTHENTICATION_BOUNDARY", "An application prompt interrupted Go To focus")
+                }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                    try fail("FOCUS_CHANGED", "The foreground application changed during Go To focus")
                 }
                 if let focused = current.focusedWindow,
                    text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet",
