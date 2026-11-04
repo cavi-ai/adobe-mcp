@@ -628,17 +628,6 @@ final class Observation {
                     && abs(rect.width - f[2]) <= 2 && abs(rect.height - f[3]) <= 2
             }) { return }
         }
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-           bool(root, "AXFrontmost") == true, let focused = observation.focusedWindow, let f = frame(focused) {
-            let visible = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-            if visible.contains(where: { item in
-                guard item[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
-                      let bounds = item[kCGWindowBounds as String] as? [String: Any],
-                      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                return abs(rect.minX - f[0]) <= 2 && abs(rect.minY - f[1]) <= 2
-                    && abs(rect.width - f[2]) <= 2 && abs(rect.height - f[3]) <= 2
-            }) { return }
-        }
         var settable: DarwinBoolean = false
         guard AXUIElementIsAttributeSettable(root, "AXFrontmost" as CFString, &settable) == .success && settable.boolValue else { try fail("FOCUS_UNAVAILABLE", "Native AXFrontmost control is not settable") }
         phase = "focus_dispatch"; dispatched = true
@@ -655,15 +644,36 @@ final class Observation {
         }
         try perform(dockItems[0])
         _ = app.activate(options: [.activateAllWindows])
-        try await Task.sleep(nanoseconds: 150_000_000)
         phase = "focus_observation"
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-              bool(AXUIElementCreateApplication(app.processIdentifier), "AXFrontmost") == true else {
-            let system = AXUIElementCreateSystemWide()
-            var livePID: pid_t = 0
-            if let focusedApp = axElement(attribute(system, "AXFocusedApplication")) { AXUIElementGetPid(focusedApp, &livePID) }
-            try fail("FOCUS_CHANGED", "Native foreground PID does not match Character Animator after Dock activation (workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), accessibility=\(livePID), target=\(app.processIdentifier), app_frontmost=\(bool(root, "AXFrontmost") ?? false))")
+        let deadline = ProcessInfo.processInfo.systemUptime + 5.0
+        while true {
+            guard deadline - ProcessInfo.processInfo.systemUptime > 0 else { break }
+            guard AXIsProcessTrusted() else {
+                try fail("FOCUS_UNAVAILABLE", "Accessibility permission changed during foreground observation")
+            }
+            let instances = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+                .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+            guard instances.count == 1,
+                  instances[0].processIdentifier == app.processIdentifier,
+                  (instances[0].launchDate?.timeIntervalSince1970 ?? 0)
+                    == (app.launchDate?.timeIntervalSince1970 ?? 0) else {
+                try fail("FOCUS_CHANGED", "Character Animator process identity changed during foreground activation")
+            }
+            let currentWorkspacePID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+            let currentAXRoot = AXUIElementCreateApplication(app.processIdentifier)
+            let axRemaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard axRemaining > 0 else { break }
+            AXUIElementSetMessagingTimeout(currentAXRoot, Float(min(0.75, axRemaining)))
+            if currentWorkspacePID == app.processIdentifier,
+               bool(currentAXRoot, "AXFrontmost") == true { return }
+            let sleepRemaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard sleepRemaining > 0 else { break }
+            try await Task.sleep(nanoseconds: UInt64(min(0.1, sleepRemaining) * 1_000_000_000))
         }
+        let system = AXUIElementCreateSystemWide()
+        var livePID: pid_t = 0
+        if let focusedApp = axElement(attribute(system, "AXFocusedApplication")) { AXUIElementGetPid(focusedApp, &livePID) }
+        try fail("FOCUS_CHANGED", "Native foreground PID did not stabilize after the single activation (workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), accessibility=\(livePID), target=\(app.processIdentifier), app_frontmost=\(bool(AXUIElementCreateApplication(app.processIdentifier), "AXFrontmost") ?? false))")
     }
     func chooserDestination(_ initialObservation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
         var observation = initialObservation
