@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 - 2026-11-04
+
+### Fixed
+
+- Reconcile an unknown initial Save As only after the matching Character Animator process exits and the destination remains absent.
+
 ## Unreleased
 
 ### Added

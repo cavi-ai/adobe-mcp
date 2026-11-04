@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cavi_mcp_core.contracts import failure
 from mcp import ClientSession, StdioServerParameters
@@ -236,6 +237,41 @@ class CharacterOwnershipTests(unittest.TestCase):
                                           "title": "Character Animator", "modal": False}]
         self.native.state["fingerprint"] = "closed-save-as"
         return lease, packet
+
+    def pending_submitted_save_as_after_exit(self):
+        source = self.root / "workspace/MaraDialogue-v003"
+        parent = self.root / "workspace/welcome-complete-v001"
+        source.mkdir()
+        parent.mkdir()
+        (source / "MaraDialogue-v003.chproj").write_bytes(b"source project")
+        (source / "Ch Data").mkdir()
+        (source / "Ch Data/projectdata.rope").write_bytes(b"source data")
+        self.native.state.update(
+            bundle_id="com.adobe.Character-Animator.application",
+            application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            pid=29112, launch_time=1793689177.654345, running=True, process_count=1,
+            project_roots=[str(source.resolve())], authentication_or_permission_prompt=False)
+        lease = self.claim()
+        self.native.fail = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.save_copy("welcome-complete-v001", "MaraWelcomeComplete-v001", lease["lease_id"])
+        packet = self.client.read("operation.json")
+        packet["last_command"] = "chooser_continue_directory"
+        packet["native"]["operation"] = "chooser_continue_directory"
+        packet["native"]["result"] = {"status": "native_chooser_submitted", "completion": "unverified"}
+        packet["native"]["state"].update(
+            bundle_id="com.adobe.Character-Animator.application",
+            application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            pid=29112, launch_time=1793689177.654345,
+            project_roots=[str(source.resolve())], authentication_or_permission_prompt=False)
+        write_json(self.client.directory / "operation.json", packet)
+        self.native.state = {
+            "bundle_id": "com.adobe.Character-Animator.application",
+            "application": "/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            "running": False, "process_count": 0, "fingerprint": "character-app-stopped",
+            "authentication_or_permission_prompt": False,
+        }
+        return lease, packet, source, parent / "MaraWelcomeComplete-v001"
 
     def pending_unknown_import(self):
         lease = self.claim()
@@ -968,6 +1004,133 @@ class CharacterOwnershipTests(unittest.TestCase):
                 if create_destination:
                     destination.rmdir()
 
+    def test_reconcile_submitted_copy_after_process_exit_archives_no_copy_and_expires_original_lease(self):
+        lease, packet, source, destination = self.pending_submitted_save_as_after_exit()
+        source_files = {path.relative_to(source): path.read_bytes()
+                        for path in source.rglob("*") if path.is_file()}
+        expired_lease = self.client.read("lease.json")
+        expired_lease["expires_at"] = time.time() - 1
+        write_json(self.client.directory / "lease.json", expired_lease)
+        native_calls = list(self.native.calls)
+
+        result = self.client.operation_control(
+            "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+
+        self.assertEqual(result["status"], "destination_absent_after_process_exit")
+        self.assertEqual(result["completion"], "no_copy_verified")
+        self.assertFalse(result["expected_output_exists"])
+        self.assertFalse(destination.exists())
+        self.assertEqual(self.native.calls, native_calls + ["inspect", "inspect"])
+        self.assertIsNone(self.client.read("operation.json"))
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["state"], "resolved")
+        self.assertEqual(archived["resolution"], "reconcile_copy_after_exit")
+        self.assertEqual(archived["failure"], packet["failure"])
+        self.assertEqual(archived["native"], packet["native"])
+        released = self.client.read("lease.json")
+        self.assertEqual(released["lease_id"], lease["lease_id"])
+        self.assertEqual(released["owner"], lease["owner"])
+        self.assertEqual(released["project_id"], packet["before_project_id"])
+        self.assertEqual(released["expires_at"], 0)
+        self.assertEqual({path.relative_to(source): path.read_bytes()
+                          for path in source.rglob("*") if path.is_file()}, source_files)
+
+    def test_reconcile_submitted_copy_after_exit_rejects_unsupported_or_changed_evidence(self):
+        lease, packet, _, destination = self.pending_submitted_save_as_after_exit()
+        original_lease = self.client.read("lease.json")
+        original_state = copy.deepcopy(self.native.state)
+        original_packet = copy.deepcopy(packet)
+        operation_path = self.client.directory / "operation.json"
+        lease_path = self.client.directory / "lease.json"
+
+        cases = (
+            ("wrong lease", lambda damaged, current_lease, state: None, "foreign"),
+            ("wrong operation", lambda damaged, current_lease, state: damaged.update(operation="import"), None),
+            ("unsupported stage", lambda damaged, current_lease, state: damaged.update(
+                last_command="chooser_destination"), None),
+            ("not submitted", lambda damaged, current_lease, state: damaged["native"]["result"].update(
+                status="native_directory_requested"), None),
+            ("changed source root", lambda damaged, current_lease, state: damaged["native"]["state"].update(
+                project_roots=[str(self.root / "workspace/other")]), None),
+            ("mismatched lease project", lambda damaged, current_lease, state: current_lease.update(
+                project_id="changed-project"), None),
+            ("owned lease", lambda damaged, current_lease, state: current_lease.update(
+                owned_root=str(self.root / "workspace/other")), None),
+            ("app still running", lambda damaged, current_lease, state: state.update(
+                running=True, process_count=1, pid=29112, launch_time=1793689177.654345), None),
+            ("second app process", lambda damaged, current_lease, state: state.update(
+                running=False, process_count=1), None),
+            ("permission prompt", lambda damaged, current_lease, state: state.update(
+                authentication_or_permission_prompt=True), None),
+        )
+        for label, damage, requested_lease in cases:
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(original_packet)
+                current_lease = copy.deepcopy(original_lease)
+                state = copy.deepcopy(original_state)
+                damage(damaged, current_lease, state)
+                write_json(operation_path, damaged)
+                write_json(lease_path, current_lease)
+                self.native.state = state
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control(
+                        "reconcile_copy_after_exit", packet["operation_id"],
+                        requested_lease or lease["lease_id"])
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                self.assertEqual(self.client.read("lease.json"), current_lease)
+                self.assertFalse(destination.exists())
+
+        write_json(operation_path, original_packet)
+        write_json(lease_path, original_lease)
+        self.native.state = copy.deepcopy(original_state)
+        destination.mkdir()
+        with self.assertRaises(CharacterRejected):
+            self.client.operation_control(
+                "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+        destination.rmdir()
+        self.assertEqual(self.client.read("operation.json"), original_packet)
+        self.assertEqual(self.client.read("lease.json"), original_lease)
+
+    def test_reconcile_submitted_copy_after_exit_rejects_unstable_absent_process_observation(self):
+        lease, packet, _, _ = self.pending_submitted_save_as_after_exit()
+        original_lease = self.client.read("lease.json")
+        original_packet = copy.deepcopy(packet)
+        self.native.export_inspect_states = [
+            {"fingerprint": "stopped-first-observation"},
+            {"fingerprint": "stopped-second-observation"},
+        ]
+
+        with self.assertRaisesRegex(CharacterRejected, "stable stopped-process observations"):
+            self.client.operation_control(
+                "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.client.read("operation.json"), original_packet)
+        self.assertEqual(self.client.read("lease.json"), original_lease)
+
+    def test_reconcile_submitted_copy_after_exit_retries_archive_cleanup_after_unlink_failure(self):
+        lease, packet, _, _ = self.pending_submitted_save_as_after_exit()
+        operation_path = self.client.directory / "operation.json"
+        original_unlink = Path.unlink
+
+        def fail_operation_unlink(path, *args, **kwargs):
+            if path == operation_path:
+                raise OSError("fixture unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with (patch.object(Path, "unlink", fail_operation_unlink),
+              self.assertRaisesRegex(CharacterUnknown, "pending journal remains")):
+            self.client.operation_control(
+                "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.client.read("operation.json"), packet)
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["result"]["completion"], "no_copy_verified")
+        retried = self.client.operation_control(
+            "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(retried["status"], "destination_absent_after_process_exit")
+        self.assertIsNone(self.client.read("operation.json"))
+
     def test_resume_rejects_active_wrong_owner_operation_or_project_without_changes(self):
         lease, packet = self.pending_unknown_import()
         lease_path = self.client.directory / "lease.json"
@@ -1061,6 +1224,8 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("reconcile_unsubmitted_copy",
+                              tools["operation_control"].input_schema["properties"]["action"]["enum"])
+                self.assertIn("reconcile_copy_after_exit",
                               tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("import_media", tools)
                 self.assertIn("scene_action", tools)

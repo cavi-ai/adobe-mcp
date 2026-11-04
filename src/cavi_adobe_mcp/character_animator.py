@@ -19,6 +19,7 @@ from cavi_mcp_core.journal import fingerprint, write_json
 from .character_bridge import CharacterRejected, CharacterUnknown, NativeBridge
 
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
+CHARACTER_BUNDLE_ID = "com.adobe.Character-Animator.application"
 
 
 
@@ -631,7 +632,7 @@ class CharacterAnimator:
                           user_confirmed_cancelled=False):
         if action not in ("inspect", "verify_copy", "continue_copy", "continue_import", "continue_export",
                           "confirm_cancelled_import", "cancel_unsubmitted",
-                          "reconcile_unsubmitted_copy") or not IDENTIFIER.fullmatch(operation_id):
+                          "reconcile_unsubmitted_copy", "reconcile_copy_after_exit") or not IDENTIFIER.fullmatch(operation_id):
             raise CharacterRejected("Use a known operation ID and a supported operation control action")
         if action == "confirm_cancelled_import" and type(user_confirmed_cancelled) is not bool:
             raise CharacterRejected("user_confirmed_cancelled must be a strict boolean")
@@ -646,6 +647,8 @@ class CharacterAnimator:
                 return {"status": packet["state"], "operation_id": operation_id,
                         "operation": packet, "native": observed, "retry_safe": False}
             lease = self.read("lease.json")
+            if action == "reconcile_copy_after_exit":
+                return self._reconcile_copy_after_exit(packet, lease, lease_id, observed, cancelled)
             required_operation = ("import" if action in ("continue_import", "confirm_cancelled_import")
                                   else "export_png_wav" if action == "continue_export" else "save_as")
             allowed_operations = ({"save_as", "export_png_wav"} if action == "cancel_unsubmitted"
@@ -1308,3 +1311,134 @@ class CharacterAnimator:
             except OSError as exc:
                 raise CharacterUnknown("Native outcome was observed but its resolution journal was not committed") from exc
             return {**result, "operation_id": operation_id, "retry_safe": False}
+
+    def _reconcile_copy_after_exit(self, packet, lease, lease_id, observed, cancelled):
+        if (not lease or lease_id != lease.get("lease_id")
+                or lease.get("project_id") != packet.get("before_project_id")
+                or lease.get("owned_root") is not None
+                or not isinstance(lease.get("owner"), str) or not lease["owner"]
+                or packet.get("operation") != "save_as"
+                or packet.get("initial_native_operation") != "save_as"
+                or packet.get("state") != "unknown"
+                or packet.get("last_command") != "chooser_continue_directory"):
+            raise CharacterRejected("Reconcile requires the matching lease and an unknown initial Save As submission")
+
+        source, parent, destination = self._initial_copy_paths(packet)
+        source_root = str(source)
+        before_native = packet.get("before_native")
+        recorded_native = packet.get("native")
+        before_state = before_native.get("state") if isinstance(before_native, dict) else None
+        recorded_state = recorded_native.get("state") if isinstance(recorded_native, dict) else None
+        recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
+        original_process = None
+        if isinstance(before_state, dict):
+            original_process = (before_state.get("pid"), before_state.get("launch_time"))
+
+        def source_observation_matches(state):
+            return (isinstance(state, dict)
+                    and project_identity(state) == packet.get("before_project_id")
+                    and state.get("project_roots") == [source_root]
+                    and state.get("bundle_id") == before_state.get("bundle_id")
+                    and state.get("application") == before_state.get("application")
+                    and original_process[0] == state.get("pid")
+                    and original_process[1] == state.get("launch_time"))
+
+        def process_is_absent(state):
+            return (isinstance(state, dict)
+                    and state.get("bundle_id") == before_state.get("bundle_id")
+                    and state.get("application") == before_state.get("application")
+                    and state.get("running") is False
+                    and type(state.get("process_count")) is int and state["process_count"] == 0
+                    and state.get("pid") is None
+                    and state.get("launch_time") is None
+                    and state.get("authentication_or_permission_prompt") is not True)
+
+        if (not isinstance(before_state, dict)
+                or not isinstance(original_process[0], int) or isinstance(original_process[0], bool)
+                or original_process[0] <= 0
+                or not isinstance(original_process[1], (int, float))
+                or isinstance(original_process[1], bool) or original_process[1] <= 0
+                or before_state.get("bundle_id") != CHARACTER_BUNDLE_ID
+                or not isinstance(before_state.get("application"), str)
+                or not Path(before_state["application"]).is_absolute()
+                or project_identity(before_state) != packet.get("before_project_id")
+                or before_state.get("project_roots") != [source_root]
+                or not source_observation_matches(recorded_state)
+                or not isinstance(recorded_native, dict)
+                or recorded_native.get("operation") != "chooser_continue_directory"
+                or not isinstance(recorded_result, dict)
+                or recorded_result.get("status") != "native_chooser_submitted"
+                or not isinstance(recorded_native.get("state"), dict)
+                or recorded_native["state"].get("authentication_or_permission_prompt") is True):
+            raise CharacterRejected("Reconcile requires the recorded submitted chooser stage and unchanged source identity")
+
+        def directory_identity(path):
+            stat = path.stat()
+            return {"device": stat.st_dev, "inode": stat.st_ino}
+
+        source_identity = directory_identity(source)
+        parent_identity = directory_identity(parent)
+        first_state = observed.get("state") if isinstance(observed, dict) else None
+        if (not process_is_absent(first_state) or destination.exists()
+                or directory_identity(source) != source_identity
+                or directory_identity(parent) != parent_identity):
+            raise CharacterRejected("Reconcile requires the original app to be stopped and the copy destination absent")
+
+        fresh = self.bridge.call("inspect", cancelled=cancelled)
+        fresh_state = fresh.get("state", {})
+        if (not process_is_absent(fresh_state)
+                or fresh_state.get("fingerprint") != first_state.get("fingerprint")
+                or destination.exists()
+                or directory_identity(source) != source_identity
+                or directory_identity(parent) != parent_identity):
+            raise CharacterRejected("Reconcile requires stable stopped-process observations and an absent destination")
+
+        result = {"status": "destination_absent_after_process_exit",
+                  "completion": "no_copy_verified", "expected_output_exists": False,
+                  "native": fresh}
+        resolved = dict(packet)
+        resolved.update(state="resolved", resolution="reconcile_copy_after_exit",
+                        reconciliation_basis="submitted_save_as_process_exited_with_destination_absent",
+                        reconciliation_native=fresh, result=result)
+        current_lease = self.read("lease.json")
+        if (not current_lease or current_lease.get("lease_id") != lease_id
+                or current_lease.get("project_id") != packet.get("before_project_id")
+                or current_lease.get("owned_root") is not None):
+            raise CharacterRejected("The original matching lease changed before reconciliation")
+        expires_at = current_lease.get("expires_at")
+        if (not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool)):
+            raise CharacterRejected("The original matching lease has an invalid expiry")
+        current_lease["expires_at"] = 0
+        try:
+            write_json(self.directory / "lease.json", current_lease)
+        except OSError as exc:
+            raise CharacterUnknown("The original lease could not be expired; the pending operation remains") from exc
+        receipts = self.directory / "operations"
+        receipts.mkdir(exist_ok=True, mode=0o700)
+        receipt = receipts / (packet["operation_id"] + ".json")
+        if receipt.exists():
+            archived = self.read("operations/" + packet["operation_id"] + ".json")
+            archived_native = archived.get("reconciliation_native") if isinstance(archived, dict) else None
+            archived_state = archived_native.get("state") if isinstance(archived_native, dict) else None
+            archived_result = archived.get("result") if isinstance(archived, dict) else None
+            if (not isinstance(archived, dict)
+                    or archived.get("operation_id") != packet["operation_id"]
+                    or archived.get("resolution") != "reconcile_copy_after_exit"
+                    or not isinstance(archived_result, dict)
+                    or archived_result.get("status") != "destination_absent_after_process_exit"
+                    or archived_result.get("completion") != "no_copy_verified"
+                    or not process_is_absent(archived_state)
+                    or archived.get("before_project_id") != packet.get("before_project_id")
+                    or archived.get("intent") != packet.get("intent")
+                    or archived.get("last_command") != packet.get("last_command")):
+                raise CharacterRejected("A different operation receipt already exists")
+        else:
+            try:
+                write_json(receipt, resolved)
+            except OSError as exc:
+                raise CharacterUnknown("The original lease expired; the recovery receipt was not committed") from exc
+        try:
+            (self.directory / "operation.json").unlink()
+        except OSError as exc:
+            raise CharacterUnknown("Recovery receipt was retained and the original lease expired; the pending journal remains") from exc
+        return {**result, "operation_id": packet["operation_id"], "retry_safe": False}
