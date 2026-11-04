@@ -18,7 +18,7 @@ from cavi_adobe_mcp import authoring_server, native_media
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORING_TOOLS = {
-    "adobe_status", "adobe_inspect", "adobe_open_copy", "adobe_create_canvas", "adobe_edit_layers",
+    "adobe_status", "adobe_inspect", "adobe_open_copy", "adobe_create_canvas", "adobe_resize_image", "adobe_edit_layers",
     "adobe_add_group", "adobe_place_image", "adobe_add_rectangle", "adobe_add_path", "adobe_add_text",
     "adobe_apply_mask", "adobe_fonts", "adobe_export", "adobe_close_copy", "adobe_operation_control",
     "after_effects_render", "media_review_movie",

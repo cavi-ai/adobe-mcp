@@ -73,6 +73,8 @@ class ContractBridge(AdobeAuthoring):
             snapshot.update(width=request['canvas_width'], height=request['canvas_height'],
                             bit_depth='BitsPerChannelType.' + ('SIXTEEN' if request['canvas_bit_depth'] == 16 else 'EIGHT'),
                             color_profile='sRGB IEC61966-2.1')
+        if request['action'] == 'resize_image':
+            snapshot.update(width=request['resize_width'], height=request['resize_height'])
         return snapshot
 
 
@@ -83,6 +85,27 @@ class AdobeAuthoringTests(unittest.TestCase):
         for depth in (32, True, 8.0, None):
             with self.subTest(depth=depth), self.assertRaises(ValueError):
                 self.bridge.create_canvas(32, 32, 'invalid.psd', bit_depth=depth)
+
+    def test_resize_image_validates_before_dispatch_and_returns_document_snapshot(self):
+        session = self.session()
+        result = self.bridge.resize_image(session, 768, 768)
+        request = self.bridge.requests[-1]
+        self.assertEqual(request['action'], 'resize_image')
+        self.assertEqual((request['resize_width'], request['resize_height']), (768, 768))
+        self.assertEqual((result['document']['width'], result['document']['height']), (768, 768))
+        self.assertIn('layers', result['document'])
+        self.assertIn('paths', result['document'])
+        count = len(self.bridge.requests)
+        for width, height in ((0, 1), (2881, 1), (True, 2), (2.0, 2), (2, None)):
+            with self.subTest(width=width, height=height), self.assertRaises(ValueError):
+                self.bridge.resize_image(session, width, height)
+        self.assertEqual(len(self.bridge.requests), count)
+
+    def test_resize_image_rejects_illustrator_before_native_dispatch(self):
+        bridge = ContractBridge(self.root, app='illustrator')
+        with self.assertRaisesRegex(ValueError, 'only in Photoshop'):
+            bridge.resize_image('0' * 32, 768, 768)
+        self.assertEqual(bridge.requests, [])
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -546,6 +569,13 @@ class AdobeAuthoringTests(unittest.TestCase):
         self.assertIn('temporary.colorProfileType = ColorProfile.NONE', source)
         self.assertNotIn('ColorProfileType', source)
 
+    def test_photoshop_resize_uses_native_resampling_and_editable_snapshot(self):
+        driver = Path(__file__).resolve().parents[1] / 'src/cavi_adobe_mcp/adobe_authoring.jsx'
+        source = driver.read_text()
+        self.assertIn('d.resizeImage(new UnitValue(r.resize_width, "px")', source)
+        self.assertIn('d.resolution, ResampleMethod.BICUBICSHARPER', source)
+        self.assertIn('result = snapshot(d);', source)
+
 
 class AdobeCanvasProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdio_catalog_exposes_typed_photoshop_canvas_without_eager_state(self):
@@ -567,10 +597,19 @@ class AdobeCanvasProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('destination', canvas.input_schema['required'])
                 self.assertFalse(canvas.annotations.read_only_hint)
                 self.assertFalse((workspace / '.adobe-authoring').exists())
+                resize = tools['adobe_resize_image']
+                self.assertEqual(set(resize.input_schema['required']), {'application', 'session_id', 'width', 'height'})
+                self.assertEqual(resize.input_schema['properties']['application']['const'], 'photoshop')
+                self.assertFalse(resize.annotations.read_only_hint)
+                self.assertTrue(resize.annotations.destructive_hint)
                 rejected = await client.call_tool('adobe_create_canvas', {
                     'width': True, 'height': 256, 'destination': 'output/canvas.psd'})
                 self.assertTrue(rejected.is_error)
                 self.assertEqual(rejected.structured_content['error']['outcome'], 'rejected')
+                self.assertFalse((workspace / '.adobe-authoring').exists())
+                rejected_resize = await client.call_tool('adobe_resize_image', {
+                    'application': 'photoshop', 'session_id': '0' * 32, 'width': True, 'height': 768})
+                self.assertTrue(rejected_resize.is_error)
                 self.assertFalse((workspace / '.adobe-authoring').exists())
 
 

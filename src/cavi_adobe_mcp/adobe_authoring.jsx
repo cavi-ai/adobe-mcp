@@ -289,6 +289,22 @@ var CAVI_RESPONSE = (function (r) {
                 d.close(SaveOptions.DONOTSAVECHANGES);
                 delete registry[r.session_id];
                 result = {closed: true, path: r.document_path};
+            } else if (r.action === "resize_image") {
+                if (!ps) throw Error("Image resizing is supported only in Photoshop");
+                if (typeof r.resize_width !== "number" || !isFinite(r.resize_width)
+                        || Math.floor(r.resize_width) !== r.resize_width || r.resize_width < 1 || r.resize_width > 2880
+                        || typeof r.resize_height !== "number" || !isFinite(r.resize_height)
+                        || Math.floor(r.resize_height) !== r.resize_height || r.resize_height < 1 || r.resize_height > 2880)
+                    throw Error("Image width and height must be integers in 1..2880");
+                changed = true;
+                d.resizeImage(new UnitValue(r.resize_width, "px"), new UnitValue(r.resize_height, "px"),
+                              d.resolution, ResampleMethod.BICUBICSHARPER);
+                if (d.width.as("px") !== r.resize_width || d.height.as("px") !== r.resize_height)
+                    throw Error("Photoshop did not apply the requested image dimensions");
+                saveOwned(d);
+                result = snapshot(d);
+                if (result.width !== r.resize_width || result.height !== r.resize_height)
+                    throw Error("Photoshop resize readback differs from the requested dimensions");
             } else if (r.action === "export") {
                 var output = new File(r.destination), profile = null;
                 if (output.exists || !output.parent.exists) throw Error("Export needs a new destination");
