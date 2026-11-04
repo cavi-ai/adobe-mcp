@@ -1481,6 +1481,17 @@ final class Observation {
             activatedState.removeValue(forKey: "fingerprint")
             activatedState["frontmost"] = true
             activatedState["hidden"] = false
+            if observation.focusedWindow == nil && safeBackgroundMain(observation) {
+                let canvases = observation.nodes.filter { element, _ in
+                    text(element, "AXRole") == "AXLayoutArea"
+                        && text(element, "AXTitle") != nil && frame(element) != nil
+                        && bool(element, "AXModal") != true
+                }
+                if canvases.count == 1, let focused = ready.focusedWindow,
+                   CFEqual(focused, canvases[0].0) {
+                    activatedState["focused_window"] = ready.state["focused_window"]
+                }
+            }
             guard ready.state["frontmost"] as? Bool == true,
                   ready.state["fingerprint"] as? String == sha(try canonical(fingerprintValue(activatedState))) else {
                 try fail("STALE_STATE", "Native state changed during activation; inspect the current selection before dispatch")
