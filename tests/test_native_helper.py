@@ -99,6 +99,22 @@ class BuildHelperTests(unittest.TestCase):
         build = self.root / "state/native" / native.sha256(self.source)
         self.assertEqual(sorted(p.name for p in build.iterdir()), ["build.lock"])
 
+    def test_compiler_timeouts_leave_no_build_and_allow_retry(self):
+        compiler = self.tools / "swiftc"
+        compiler.write_text('#!/bin/sh\nprintf partial > "$4"\nexec sleep 30\n')
+        with (patch.object(native, "BUILD_TIMEOUT", 0.2),
+              self.assertRaises(native.HelperError) as caught):
+            native.build_helper(self.source, self.root / "state", "helper")
+        self.assertEqual(caught.exception.code, "NATIVE_HELPER_BUILD_FAILED")
+        self.assertIsInstance(caught.exception.__cause__, subprocess.TimeoutExpired)
+        build = self.root / "state/native" / native.sha256(self.source)
+        self.assertEqual(sorted(p.name for p in build.iterdir()), ["build.lock"])
+
+        compiler.write_text(FAKE_SWIFTC)
+        helper = native.build_helper(self.source, self.root / "state", "helper")
+        self.assertEqual(helper.read_text(), self.source.read_text())
+        self.assertTrue((build / "build.json").is_file())
+
     def test_a_missing_compiler_or_source_is_unavailable(self):
         with (patch.dict(os.environ, {"PATH": str(self.root / "empty")}),
               self.assertRaises(native.HelperError) as caught):
