@@ -1271,11 +1271,12 @@ final class Observation {
                   ready.focusedWindow.map({ bool($0, "AXModal") == true }) != true else {
                 try fail("UNEXPECTED_MODAL", "A prompt or modal interrupted native menu activation")
             }
-            // Activation intentionally changes frontmost. Every other observed precondition
-            // must remain identical, and the target must now be active.
+            // Activation intentionally changes frontmost and hidden. Every other observed
+            // precondition must remain identical, and the target must now be active.
             var activatedState = observation.state
             activatedState.removeValue(forKey: "fingerprint")
             activatedState["frontmost"] = true
+            activatedState["hidden"] = false
             guard ready.state["frontmost"] as? Bool == true,
                   ready.state["fingerprint"] as? String == sha(try canonical(fingerprintValue(activatedState))) else {
                 try fail("STALE_STATE", "Native state changed during activation; inspect the current selection before dispatch")
