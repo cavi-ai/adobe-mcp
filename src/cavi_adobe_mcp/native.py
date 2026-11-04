@@ -12,7 +12,8 @@ from pathlib import Path
 
 from cavi_mcp_core.journal import write_json
 
-BUILD_TIMEOUT = 60
+# Cold optimized builds can take over a minute on Intel Macs.
+BUILD_TIMEOUT = 300
 
 
 class HelperError(Exception):
