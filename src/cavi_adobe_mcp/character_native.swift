@@ -126,10 +126,25 @@ final class Observation {
     var lastState: [String: Any]?
     var submissionMayHaveStarted = false
     var continuationDiagnostics: [String: Any]?
+    var traceAttemptID: String?
+    var traceOperationID: String?
+    var traceCount = 0
     init(applicationPath: String) throws {
         applicationURL = URL(fileURLWithPath: applicationPath).standardizedFileURL.resolvingSymlinksInPath()
         guard applicationURL.pathExtension == "app", let bundle = Bundle(url: applicationURL),
               bundle.bundleIdentifier == characterBundleID else { try fail("APPLICATION_MISMATCH", "Application bundle identity does not match Character Animator") }
+    }
+    func progress(_ event: String, details: [String: Any] = [:], sync: Bool = false) {
+        guard let attempt = traceAttemptID, traceCount < 128 else { return }
+        traceCount += 1
+        var record: [String: Any] = ["event": event, "attempt_id": attempt,
+                                     "uptime": ProcessInfo.processInfo.systemUptime]
+        if let operation = traceOperationID { record["operation_id"] = operation }
+        for (key, value) in details { record[key] = value }
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        FileHandle.standardError.write(data)
+        FileHandle.standardError.write(Data([10]))
+        if sync { FileHandle.standardError.synchronizeFile() }
     }
     func projectHandles(_ pid: pid_t) throws -> [String] {
         // This fixed read-only process inspects only the target app's open project-file paths.
@@ -190,6 +205,7 @@ final class Observation {
         return current
     }
     func observe(full: Bool = true) throws -> Observation {
+        progress("observe_started", details: ["full": full])
         let bundleMatches = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
         let matches = bundleMatches
             .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
@@ -216,6 +232,7 @@ final class Observation {
             let frontmostCapability = AXUIElementIsAttributeSettable(root, "AXFrontmost" as CFString, &frontmostSettable)
             state["focus_control"] = ["attribute": "AXFrontmost", "settable": frontmostCapability == .success && frontmostSettable.boolValue]
             var windows = attribute(root, "AXWindows") as? [AXUIElement] ?? []
+            progress("observe_ax_windows", details: ["count": windows.count])
             if let focused = axElement(attribute(root, "AXFocusedWindow")) {
                 observation.focusedWindow = focused
                 if !windows.contains(where: { CFEqual($0, focused) }) { windows.append(focused) }
@@ -265,9 +282,13 @@ final class Observation {
                 focusedElement = axElement(attribute(candidate, "AXParent"))
             }
             var budget = 512, truncated = false
+            progress("observe_tree_started", details: ["windows": windows.count])
             func walk(_ element: AXUIElement, depth: Int, path: String) -> [String: Any] {
                 var node = scalarNode(element, path: path)
                 observation.nodes.append((element, node)); budget -= 1
+                if observation.nodes.count % 64 == 0 {
+                    progress("observe_tree_progress", details: ["nodes": observation.nodes.count])
+                }
                 // File chooser sidebars are unrelated to project/scene identity and include account locations.
                 let sidebar = node["role"] as? String == "AXOutline" && node["description"] as? String == "sidebar"
                 if depth < 12 && budget > 0 && !sidebar {
@@ -282,6 +303,8 @@ final class Observation {
             }
             state["windows"] = windows.prefix(8).enumerated().map { walk($0.element, depth: 0, path: "window/" + String($0.offset)) }
             state["tree_truncated"] = truncated || windows.count > 8
+            progress("observe_tree_complete", details: ["nodes": observation.nodes.count,
+                                                         "truncated": truncated || windows.count > 8])
             if let focused = observation.focusedWindow { state["focused_window"] = scalarNode(focused, path: "focused") }
             state["selected_elements"] = observation.nodes.map(\.1).filter { $0["selected"] as? Bool == true }
             var menus: [String: Any] = [:]
@@ -321,6 +344,7 @@ final class Observation {
                 state["menu_inventory_truncated"] = remaining == 0
             }
             do {
+                progress("project_handles_started")
                 let handles = try projectHandles(application.processIdentifier)
                 state["project_file_handles"] = handles
                 state["project_roots"] = Array(Set(handles.compactMap { path -> String? in
@@ -328,6 +352,7 @@ final class Observation {
                     return path.hasSuffix(".chproj") ? URL(fileURLWithPath: path).deletingLastPathComponent().path : nil
                 })).sorted()
                 state["project_documents"] = handles.filter { $0.hasSuffix(".chproj") }
+                progress("project_handles_complete", details: ["roots": (state["project_roots"] as? [String] ?? []).count])
             } catch {
                 state["project_roots"] = []
                 state["project_handle_error"] = "unavailable"
@@ -356,6 +381,8 @@ final class Observation {
             if !prompts.isEmpty { state["blocked_prompt"] = "Resolve the application prompt manually; this adapter will not authenticate or grant permissions" }
         }
         state["fingerprint"] = sha(try canonical(fingerprintValue(state))); observation.state = state; lastState = state
+        progress("observe_complete", details: ["focused_window": observation.focusedWindow != nil,
+                                                "node_count": observation.nodes.count])
         return observation
     }
     func expected(_ request: [String: Any], observation: Observation) throws {
@@ -874,6 +901,7 @@ final class Observation {
         return ["status": "native_chooser_submitted", "destination": destination.path, "completion": "unverified", "retry_safe": false]
     }
     func continueChooser(_ initial: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+        progress("chooser_continuation_started")
         phase = "chooser_continue_preflight"
         guard let directory = parameters["directory"] as? String,
               let basename = parameters["basename"] as? String,
@@ -931,6 +959,7 @@ final class Observation {
                 } == true
         }
         func settle(_ stage: String, ready: (Observation) -> Bool) async throws -> Observation {
+            progress("settle_started", details: ["stage": stage])
             let deadline = ProcessInfo.processInfo.systemUptime + 5
             var previous: String?
             var observations = 0
@@ -948,6 +977,9 @@ final class Observation {
                 continuationDiagnostics = ["stage": stage, "last_ready": lastReady,
                                            "fingerprint_stable": fingerprintStable,
                                            "observations": observations]
+                progress("settle_observation", details: ["stage": stage, "ready": lastReady,
+                                                          "fingerprint_stable": fingerprintStable,
+                                                          "observations": observations])
                 if lastReady && fingerprintStable { return current }
                 previous = fingerprint
                 let remaining = deadline - ProcessInfo.processInfo.systemUptime
@@ -957,8 +989,11 @@ final class Observation {
         }
 
         var current = initial
+        progress("chooser_initial_state", details: ["directory_ready": isDirectoryReady(current),
+                                                     "focused_identifier": current.focusedWindow.flatMap { text($0, "AXIdentifier") } ?? "none"])
         if !isDirectoryReady(current) {
             if current.focusedWindow.map({ text($0, "AXIdentifier") }) != "GoToWindow" {
+                progress("directory_navigation_started")
                 let opened = try await chooserDestination(current, parameters: parameters)
                 guard opened["status"] as? String == "native_chooser_directory_requested" else {
                     try fail("CHOOSER_MISMATCH", "Chooser directory navigation did not reach its recorded stage")
@@ -970,6 +1005,7 @@ final class Observation {
                     try fail("CHOOSER_MISMATCH", "The exact typed chooser or its parented Go To sheet is required")
                 }
                 _ = try await continueDirectoryEntry(current, parameters: parameters)
+                progress("target_directory_entry_submitted")
                 current = try await settle("target_directory") { isDirectoryReady($0) }
             }
         }
@@ -1249,7 +1285,11 @@ final class Observation {
                 try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import"))
                 phase = "import_dispatch"
                 submissionMayHaveStarted = true
+                progress("import_submit_write_ahead", details: [
+                    "submission_may_have_started": true, "selected_path": selectedURL.path,
+                ], sync: true)
                 try perform(readyButton)
+                progress("import_submit_acknowledged")
                 return ["status": "native_chooser_submitted", "destination": selectedURL.path,
                         "completion": "unverified", "retry_safe": false]
             }
@@ -1277,7 +1317,11 @@ final class Observation {
             try verifyTopmostChooser(ready, window: try panel(ready, kind: kind))
             phase = "save_dispatch"
             submissionMayHaveStarted = true
+            progress("save_submit_write_ahead", details: [
+                "submission_may_have_started": true, "kind": kind,
+            ], sync: true)
             try perform(saveButton)
+            progress("save_submit_acknowledged")
             return ["status": "native_chooser_submitted", "destination": directoryURL.appendingPathComponent(basename).path,
                     "directory": directory, "filename": basename, "completion": "unverified", "retry_safe": false]
         }
@@ -1417,6 +1461,17 @@ final class Observation {
     func run(_ request: [String: Any]) async throws -> [String: Any] {
         guard let operation = request["operation"] as? String else { try fail("INVALID_ARGUMENT", "operation is required") }
         let parameters = request["parameters"] as? [String: Any] ?? [:]
+        if operation == "continue_chooser",
+           let trace = parameters["native_trace"] as? [String: Any],
+           let attempt = trace["attempt_id"] as? String,
+           attempt.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+            traceAttemptID = attempt
+            if let operationID = trace["operation_id"] as? String,
+               operationID.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+                traceOperationID = operationID
+            }
+            progress("request_started")
+        }
         phase = "observation"
         let observation = try observe(full: operation != "status")
         if operation == "status" || operation == "inspect" { return ["state": observation.state, "result": ["status": "observed"]] }
@@ -1571,6 +1626,13 @@ Task { @MainActor in
         FileHandle.standardOutput.write(try canonical(envelope)); FileHandle.standardOutput.write(Data([10]))
     } catch {
         let known = error as? NativeFailure
+        if operation == "continue_chooser" {
+            adapter?.progress("native_failure", details: [
+                "phase": adapter?.phase ?? "unknown",
+                "native_code": known?.code ?? "NATIVE_INSPECTION_FAILED",
+                "submission_may_have_started": adapter?.submissionMayHaveStarted ?? false,
+            ], sync: true)
+        }
         let unknown = commandPaths[operation] != nil || operation == "project_select"
             ? adapter?.primaryCommandDispatched == true : adapter?.dispatched == true
         var errorEnvelope: [String: Any] = ["code": unknown ? "OUTCOME_UNKNOWN" : known?.code ?? "NATIVE_INSPECTION_FAILED",

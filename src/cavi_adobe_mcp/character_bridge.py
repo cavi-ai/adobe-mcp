@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
@@ -67,7 +68,15 @@ class NativeBridge:
         if cancelled.is_set():
             raise CharacterRejected("Request cancelled before native dispatch")
         path, _ = application()
-        request = {"version": 1, "operation": operation, "parameters": parameters or {},
+        request_parameters = dict(parameters or {})
+        attempt_id = uuid.uuid4().hex if operation == "continue_chooser" else None
+        operation_id = request_parameters.get("operation_id") if attempt_id else None
+        if attempt_id:
+            request_parameters["native_trace"] = {
+                "attempt_id": attempt_id,
+                "operation_id": operation_id if isinstance(operation_id, str) else "",
+            }
+        request = {"version": 1, "operation": operation, "parameters": request_parameters,
                    "application": str(path)}
         if expected is not None:
             expected_keys = ["pid", "launch_time", "fingerprint"]
@@ -80,15 +89,39 @@ class NativeBridge:
         started = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="character-native-") as directory:
             log = Path(directory) / "response.json"
+            progress_log = None
+            if attempt_id:
+                progress_dir = self.directory / "character-native-attempts"
+                progress_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if progress_dir.is_symlink():
+                    raise CharacterRejected("Native attempt directory must be a private real directory")
+                progress_dir.chmod(0o700)
+                safe_operation_id = (operation_id if isinstance(operation_id, str)
+                                     and len(operation_id) == 32
+                                     and all(char in "0123456789abcdef" for char in operation_id)
+                                     else "unbound")
+                progress_log = progress_dir / f"{safe_operation_id}-{attempt_id}.jsonl"
+                descriptor = os.open(progress_log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                os.close(descriptor)
             with log.open("w+b") as output:
+                progress_output = progress_log.open("ab", buffering=0) if progress_log else subprocess.DEVNULL
                 process = subprocess.Popen([str(binary)], stdin=subprocess.PIPE, stdout=output,
-                                           stderr=subprocess.DEVNULL, start_new_session=True)
+                                           stderr=progress_output, start_new_session=True)
                 try:
                     process.stdin.write(json.dumps(request).encode())
                     process.stdin.close()
                     while process.poll() is None:
                         if cancelled.is_set() or time.monotonic() - started > self.timeout or log.stat().st_size > 4 * 1024 * 1024:
-                            raise CharacterUnknown("Native request was interrupted; inspect the app and operation journal")
+                            failure = CharacterUnknown("Native request was interrupted; inspect the app and operation journal")
+                            if progress_log:
+                                failure.native_context = {
+                                    "phase": "transport_interrupted",
+                                    "submission_may_have_started": None,
+                                    "attempt_id": attempt_id,
+                                    "progress_path": str(progress_log),
+                                    "progress": _read_progress(progress_log),
+                                }
+                            raise failure
                         time.sleep(.05)
                     if process.returncode or log.stat().st_size > 4 * 1024 * 1024:
                         raise CharacterUnknown("Native adapter did not return a bounded successful response")
@@ -105,6 +138,8 @@ class NativeBridge:
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait(timeout=2)
+                    if progress_log:
+                        progress_output.close()
         if (not isinstance(result, dict) or result.get("version") != 1
                 or result.get("operation") != operation or type(result.get("ok")) is not bool):
             raise CharacterUnknown("Native response identity differs from the request")
@@ -148,9 +183,28 @@ class NativeBridge:
                     ),
                     "continuation_diagnostics": diagnostics if isinstance(diagnostics, dict) else None,
                 }
+                if progress_log:
+                    failure.native_context.update({
+                        "attempt_id": attempt_id,
+                        "progress_path": str(progress_log),
+                        "progress": _read_progress(progress_log),
+                    })
             raise failure
         if not isinstance(result.get("state"), dict) or not isinstance(result.get("result"), dict):
             raise CharacterUnknown("Native response lacks observed state")
         result["transport"] = {"source_sha256": binary.parent.name,
                                "helper_sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+        if progress_log:
+            progress_log.unlink(missing_ok=True)
         return result
+
+
+def _read_progress(path):
+    """Read only bounded, task-owned native attempt diagnostics."""
+    try:
+        if path.is_symlink() or path.stat().st_size > 64 * 1024:
+            return ["progress file unavailable or exceeded its limit"]
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    return lines[-128:]

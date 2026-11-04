@@ -1212,7 +1212,8 @@ class CharacterAnimator:
                                  "background_panel" if export_parent and self._background_main(state) else None)
                 if not export_parent or not allowed_modals or current_phase is None:
                     raise CharacterRejected("Export continuation requires the exact existing Export Scene or parented Go To chooser")
-                arguments = {"kind": "export_png_wav", "directory": str(target),
+                arguments = {"operation_id": operation_id,
+                             "kind": "export_png_wav", "directory": str(target),
                              "basename": intent.get("name"), "project_root": source_root,
                              "output_directory_identity": identity}
 
@@ -1380,7 +1381,8 @@ class CharacterAnimator:
                 if not import_parent or not allowed_modals or not (existing_import or existing_go_to
                                                                     or self._background_main(state)):
                     raise CharacterRejected("An unrelated modal blocks the exact existing Import or Go To chooser")
-                arguments = {"kind": "import", "directory": str(staged.parent),
+                arguments = {"operation_id": operation_id,
+                             "kind": "import", "directory": str(staged.parent),
                              "basename": staged.name, "project_root": source_root,
                              "expected_sha256": intent["import_copy_sha256"]}
 
