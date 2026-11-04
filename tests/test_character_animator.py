@@ -22,6 +22,7 @@ class NativeFixture:
     def __init__(self, root):
         root = root.resolve()
         self.state = {"bundle_id": "fixture", "pid": 42, "launch_time": "fixture",
+                      "frontmost": True,
                       "project_roots": [str(root / "original")], "fingerprint": "initial"}
         self.state["windows"] = []
         self.calls = []
@@ -33,12 +34,20 @@ class NativeFixture:
         self.fail_import_focus_dispatch = False
         self.fail_import_generic_no_menu = False
         self.fail_export_submit = False
+        self.fail_export_destination = False
         self.hide_chooser_after_command = False
+        self.export_inspect_states = []
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
         self.calls.append(operation)
         if expected is not None and expected["fingerprint"] != self.state["fingerprint"]:
             raise CharacterRejected("Stale observation", "STALE_STATE")
+        if (operation == "chooser_destination"
+                and (parameters or {}).get("kind") == "export_png_wav"
+                and self.fail_export_destination):
+            raise CharacterRejected("Stale export chooser observation", "STALE_STATE")
+        if operation == "inspect" and self.export_inspect_states:
+            self.state.update(copy.deepcopy(self.export_inspect_states.pop(0)))
         if operation == "focus":
             kind = (parameters or {}).get("kind")
             panel_id, title = (("open-panel", "Import") if kind == "import" else
@@ -473,21 +482,98 @@ class CharacterOwnershipTests(unittest.TestCase):
         packet = self.client.inspect()["pending_operation"]
         self.assertEqual(packet["operation"], "export_png_wav")
         operation_id = packet["operation_id"]
+        self.assertEqual(packet["last_command"], "chooser_continue_directory")
+        self.assertEqual(packet["native"]["result"]["status"], "native_directory_requested")
         self.native.fail_export_submit = False
         self.native.state.update(frontmost=False, fingerprint="background-resume",
                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
                                                  "title": "Character Animator"},
                                  windows=[{"identifier": "main-window", "role": "AXWindow",
                                            "title": "Character Animator", "modal": False}])
+        parent = {"frontmost": True,
+                  "focused_window": {"identifier": "save-panel", "title": "Export Scene", "modal": True},
+                  "windows": [{"identifier": "save-panel", "title": "Export Scene", "modal": True}]}
+        go_to = {"frontmost": True,
+                 "focused_window": {"identifier": "GoToWindow", "role": "AXSheet", "modal": True},
+                 "windows": [{"identifier": "save-panel", "title": "Export Scene", "modal": True},
+                             {"identifier": "GoToWindow", "role": "AXSheet", "modal": True}]}
+        self.native.export_inspect_states = [
+            {**parent, "fingerprint": "export-parent-initial", "windows": [*parent["windows"],
+                 {"identifier": "main-window", "title": "Character Animator"}]},
+            {**go_to, "fingerprint": "export-go-to-transition"},
+            {**parent, "fingerprint": "export-parent-settled"},
+            {**parent, "fingerprint": "export-parent-settled"},
+        ]
+        destinations_before = self.native.calls.count("chooser_destination")
+        continues_before = self.native.calls.count("chooser_continue_directory")
+        calls_before = len(self.native.calls)
 
         result = self.client.operation_control("continue_export", operation_id, lease["lease_id"])
 
         self.assertEqual(result["status"], "native_export_submitted")
         self.assertEqual(result["completion"], "unverified")
         self.assertEqual(self.native.calls.count("export_png_wav"), 1)
+        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before)
+        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continues_before + 1)
+        self.assertEqual(self.native.calls[calls_before:][:5], ["inspect", "inspect", "inspect",
+                                                               "inspect", "chooser_continue_directory"])
         self.assertIsNone(self.client.inspect()["pending_operation"])
         archived = self.client.read("operations/" + operation_id + ".json")
         self.assertEqual(archived["resolution"], "continue_export")
+
+    def test_continue_export_rejects_changed_process_or_source_before_dispatch(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/exports").mkdir()
+        self.native.state["fingerprint"] = "f" * 64
+        fingerprint = self.client.inspect()["native"]["state"]["fingerprint"]
+        self.native.fail_export_submit = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.scene_export("exports/talk", "SignalTalk", fingerprint, lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        operation_id = packet["operation_id"]
+        self.native.fail_export_submit = False
+        baseline = copy.deepcopy(self.native.state)
+        destinations_before = self.native.calls.count("chooser_destination")
+        continues_before = self.native.calls.count("chooser_continue_directory")
+
+        self.native.state["pid"] += 1
+        with self.assertRaises(CharacterRejected):
+            self.client.operation_control("continue_export", operation_id, lease["lease_id"])
+        self.native.state = copy.deepcopy(baseline)
+
+        self.native.state["project_roots"] = [str(self.root / "original/changed")]
+        with self.assertRaises(CharacterRejected):
+            self.client.operation_control("continue_export", operation_id, lease["lease_id"])
+
+        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before)
+        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continues_before)
+        self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], operation_id)
+
+    def test_continue_export_resumes_recorded_initial_menu_acknowledgment(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/exports").mkdir()
+        self.native.state["fingerprint"] = "9" * 64
+        fingerprint = self.client.inspect()["native"]["state"]["fingerprint"]
+        self.native.fail_export_destination = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.scene_export("exports/talk", "SignalTalk", fingerprint, lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.assertEqual(packet["native"]["operation"], "export_png_wav")
+        self.assertEqual(packet["native"]["result"]["status"], "native_command_dispatched")
+        self.assertIsNone(packet.get("last_command"))
+
+        self.native.fail_export_destination = False
+        destinations_before = self.native.calls.count("chooser_destination")
+        continuations_before = self.native.calls.count("chooser_continue_directory")
+        result = self.client.operation_control("continue_export", packet["operation_id"],
+                                               lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_export_submitted")
+        self.assertEqual(self.native.calls.count("export_png_wav"), 1)
+        self.assertEqual(self.native.calls.count("chooser_destination"), destinations_before + 1)
+        self.assertEqual(self.native.calls.count("chooser_continue_directory"), continuations_before + 2)
 
     def test_cancel_unsubmitted_can_cancel_exact_export_panel(self):
         lease = self.claim()

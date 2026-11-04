@@ -745,18 +745,41 @@ class CharacterAnimator:
                         or lease.get("owned_root") != source_root
                         or state.get("authentication_or_permission_prompt") is True):
                     raise CharacterRejected("Export continuation requires the same journaled directory and owned project")
+                recorded_native = packet.get("native")
+                recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
+                last_command = packet.get("last_command")
+                if (not isinstance(recorded_native, dict)
+                        or (last_command is not None and recorded_native.get("operation") != last_command)
+                        or not isinstance(recorded_result, dict)):
+                    raise CharacterRejected("Export continuation has no recorded chooser stage to resume")
+                if (last_command == "chooser_destination"
+                        and recorded_result.get("status") == "native_chooser_directory_requested"):
+                    resume_phase = "go_to"
+                elif (last_command == "chooser_continue_directory"
+                      and recorded_result.get("status") == "native_directory_requested"):
+                    resume_phase = "export_panel"
+                elif (last_command is None
+                      and recorded_native.get("operation") == "export_png_wav"
+                      and recorded_result.get("status") == "native_command_dispatched"):
+                    resume_phase = "initial_menu"
+                else:
+                    raise CharacterRejected("Export continuation requires a recorded unsubmitted directory stage")
                 focus = state.get("focused_window") or {}
-                windows = state.get("windows", [])
-                export_panel = (focus.get("identifier") == "save-panel"
-                                and focus.get("title") == "Export Scene")
-                export_parent = any(window.get("identifier") == "save-panel"
-                                    and window.get("title") == "Export Scene" for window in windows)
-                go_to_export = (focus.get("identifier") == "GoToWindow"
-                                and focus.get("role") == "AXSheet" and export_parent)
-                if not (export_panel or go_to_export):
+                def export_phase(native_state):
+                    focused = native_state.get("focused_window") or {}
+                    if (focused.get("identifier") == "save-panel"
+                            and focused.get("title") == "Export Scene"):
+                        return "export_panel"
+                    if self._chooser_visible(native_state, "export_png_wav", allow_go_to=True):
+                        return "go_to"
+                    return None
+
+                current_phase = export_phase(state)
+                if current_phase is None or state.get("frontmost") is not True:
                     main_window = (state.get("frontmost") is False
                                    and focus.get("role") == "AXLayoutArea"
                                    and focus.get("title") == "Character Animator")
+                    windows = state.get("windows", [])
                     modal = (focus.get("modal") is True
                              or any(window.get("modal") is True or window.get("role") == "AXSheet"
                                     for window in windows if isinstance(window, dict)))
@@ -774,11 +797,57 @@ class CharacterAnimator:
                             or not self._chooser_visible(activated_state, "export_png_wav", True)):
                         raise CharacterRejected("Activation did not expose the exact same-process Export Scene chooser")
                     observed, state = activated, activated_state
+                    current_phase = export_phase(state)
+                    if current_phase is None:
+                        raise CharacterRejected("Activation did not expose a typed export chooser phase")
                 arguments = {"kind": "export_png_wav", "directory": str(target),
                              "basename": intent.get("name"), "project_root": source_root}
 
-                def continue_export_step(command):
+                process = (original.get("pid"), original.get("launch_time"))
+
+                def settle_export_phase(expected_phase):
                     nonlocal observed, state
+                    deadline = time.monotonic() + 3
+                    previous_fingerprint = None
+                    while time.monotonic() < deadline:
+                        current = self.bridge.call("inspect", cancelled=cancelled)
+                        current_state = current.get("state", {})
+                        if ((current_state.get("pid"), current_state.get("launch_time")) != process
+                                or project_identity(current_state) != packet["before_project_id"]
+                                or current_state.get("project_roots") != [source_root]
+                                or current_state.get("authentication_or_permission_prompt") is True):
+                            raise CharacterRejected("The export process, project or prompt changed while its chooser settled")
+                        if current_state.get("frontmost") is not True:
+                            raise CharacterRejected("The exact export chooser is not in the foreground")
+                        focused = current_state.get("focused_window") or {}
+                        panel = (focused.get("identifier") == "save-panel"
+                                 and focused.get("title") == "Export Scene")
+                        go_to = (focused.get("identifier") == "GoToWindow"
+                                 and focused.get("role") == "AXSheet"
+                                 and self._chooser_visible(current_state, "export_png_wav", True))
+                        phase = "export_panel" if panel else "go_to" if go_to else None
+                        if phase == expected_phase:
+                            fingerprint_value = current_state.get("fingerprint")
+                            if (isinstance(fingerprint_value, str) and fingerprint_value
+                                    and fingerprint_value == previous_fingerprint):
+                                observed, state = current, current_state
+                                return
+                            previous_fingerprint = fingerprint_value
+                        else:
+                            previous_fingerprint = None
+                            if phase is None:
+                                modal = (focused.get("modal") is True or focused.get("role") == "AXSheet"
+                                         or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                                for window in current_state.get("windows", [])
+                                                if isinstance(window, dict)))
+                                if modal:
+                                    raise CharacterRejected("An unrelated modal replaced the exact export chooser")
+                        time.sleep(.1)
+                    raise CharacterUnknown("The exact recorded export chooser phase did not reach a stable observation")
+
+                def continue_export_step(expected_phase, command="chooser_continue_directory"):
+                    nonlocal observed, state
+                    settle_export_phase(expected_phase)
                     current = self.bridge.call(command, arguments, expected=state, cancelled=cancelled)
                     observed, state = current, current["state"]
                     packet.update(state="unknown", native=current, last_command=command)
@@ -786,18 +855,30 @@ class CharacterAnimator:
                     return current
 
                 try:
-                    selected = continue_export_step(
-                        "chooser_continue_directory" if go_to_export else "chooser_destination")
-                    for _ in range(3):
-                        if selected.get("result", {}).get("status") not in (
-                                "native_chooser_directory_requested", "native_directory_requested"):
-                            break
-                        selected = continue_export_step("chooser_continue_directory")
+                    if resume_phase == "initial_menu":
+                        if current_phase == "export_panel":
+                            selected = continue_export_step("export_panel", "chooser_destination")
+                            status = selected.get("result", {}).get("status")
+                            if status == "native_chooser_directory_requested":
+                                selected = continue_export_step("go_to")
+                            elif status != "native_chooser_submitted":
+                                raise CharacterUnknown("Native export folder chooser did not open; inspect its pending operation")
+                        else:
+                            selected = continue_export_step("go_to")
+                        if selected.get("result", {}).get("status") == "native_directory_requested":
+                            selected = continue_export_step("export_panel")
+                    elif resume_phase == "go_to":
+                        selected = continue_export_step("go_to")
+                        if selected.get("result", {}).get("status") == "native_directory_requested":
+                            selected = continue_export_step("export_panel")
+                    else:
+                        selected = continue_export_step("export_panel")
                     if selected.get("result", {}).get("status") != "native_chooser_submitted":
                         raise CharacterUnknown("Native export chooser was not submitted; inspect its pending operation")
                     after = self.bridge.call("inspect", cancelled=cancelled)
                     if (project_identity(after["state"]) != packet["before_project_id"]
                             or after["state"].get("project_roots") != [source_root]
+                            or (after["state"].get("pid"), after["state"].get("launch_time")) != process
                             or after["state"].get("authentication_or_permission_prompt") is True):
                         raise CharacterUnknown("Export submission changed the owned project or exposed a prompt")
                     result = {"status": "native_export_submitted", "completion": "unverified",
