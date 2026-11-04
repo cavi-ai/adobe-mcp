@@ -907,6 +907,8 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(staged.read_bytes(), source.read_bytes())
         self.assertEqual(self.native.last_continue_chooser_parameters["expected_sha256"],
                          result["source"]["sha256"])
+        self.assertEqual(self.native.last_continue_chooser_parameters["operation_id"],
+                         result["operation_id"])
         self.assertEqual(self.native.calls[len(before_import):].count("import"), 1)
         self.assertEqual(self.native.calls[len(before_import):].count("chooser_destination"), 0)
         self.assertEqual(self.native.calls[len(before_import):].count("continue_chooser"), 1)

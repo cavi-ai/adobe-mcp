@@ -749,6 +749,7 @@ class CharacterAnimator:
                         nonlocal native, dispatched
                         if command == "continue_chooser":
                             current = native
+                            arguments = {**arguments, "operation_id": operation_id}
                             packet.pop("native_continuation", None)
                             packet.update(atomic_continuation_attempted=True)
                             write_json(journal, packet)
