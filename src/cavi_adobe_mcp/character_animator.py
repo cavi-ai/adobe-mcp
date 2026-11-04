@@ -163,17 +163,25 @@ class CharacterAnimator:
                 lease = {**lease, "lease_id": uuid.uuid4().hex,
                          "project_id": identity, "expires_at": time.time() + ttl_seconds}
                 write_json(self.directory / "lease.json", lease)
-            elif action in ("renew", "release"):
+            elif action == "renew":
                 if (not active or lease_id != lease["lease_id"] or identity != lease["project_id"]):
                     raise CharacterRejected("Lease is expired, stale or owned by another caller")
-                if action == "release":
-                    if observed["pending_operation"]:
-                        raise CharacterRejected("Inspect and resolve the pending operation before releasing ownership")
-                    (self.directory / "lease.json").unlink()
-                    lease = None
+                lease["expires_at"] = time.time() + ttl_seconds
+                write_json(self.directory / "lease.json", lease)
+            elif action == "release":
+                if lease is None or lease_id != lease.get("lease_id"):
+                    raise CharacterRejected("Lease is expired, stale or owned by another caller")
+                if observed["pending_operation"]:
+                    raise CharacterRejected("Inspect and resolve the pending operation before releasing ownership")
+                if not active or identity != lease.get("project_id"):
+                    self._release_owned_lease_after_exit(lease, observed, cancelled)
+                    identity = lease["project_id"]
                 else:
-                    lease["expires_at"] = time.time() + ttl_seconds
-                    write_json(self.directory / "lease.json", lease)
+                    current = self.read("lease.json")
+                    if current != lease or self.read("operation.json") is not None:
+                        raise CharacterRejected("Lease or operation state changed before release")
+                (self.directory / "lease.json").unlink()
+                lease = None
             result = {"project_id": identity, "owner": lease["owner"] if lease else None,
                       "expires_at": lease["expires_at"] if lease else None,
                       "state": "owned" if lease and lease["expires_at"] > time.time() else "unclaimed",
@@ -184,6 +192,47 @@ class CharacterAnimator:
             if action in ("claim", "renew", "resume"):
                 result["lease_id"] = lease["lease_id"]
             return result
+
+    def _release_owned_lease_after_exit(self, lease, first_observation, cancelled):
+        """Release one matching owned-copy lease only after stable native process absence."""
+        root_value = lease.get("owned_root") if isinstance(lease, dict) else None
+        root_identity = lease.get("owned_root_identity") if isinstance(lease, dict) else None
+        if (not isinstance(lease.get("owner"), str) or not lease["owner"]
+                or not isinstance(lease.get("project_id"), str) or not lease["project_id"]
+                or not isinstance(root_value, str) or not root_value
+                or not isinstance(root_identity, dict)):
+            raise CharacterRejected("Stopped-app release requires a first-hand owned project root")
+        root = self.path(root_value)
+        if not root.is_dir() or root.is_symlink() or self._directory_identity(root) != root_identity:
+            raise CharacterRejected("The owned project root identity changed; the lease remains retained")
+
+        def stopped(state):
+            return (isinstance(state, dict)
+                    and state.get("bundle_id") == CHARACTER_BUNDLE_ID
+                    and isinstance(state.get("application"), str)
+                    and Path(state["application"]).is_absolute()
+                    and state.get("running") is False
+                    and type(state.get("process_count")) is int and state["process_count"] == 0
+                    and type(state.get("bundle_process_count")) is int
+                    and state["bundle_process_count"] == 0
+                    and state.get("pid") is None and state.get("launch_time") is None
+                    and state.get("project_roots") in (None, [])
+                    and state.get("authentication_or_permission_prompt") is not True)
+
+        first_state = first_observation.get("native", {}).get("state", {})
+        first_fingerprint = first_state.get("fingerprint")
+        if (not stopped(first_state) or not isinstance(first_fingerprint, str)
+                or not first_fingerprint or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Owned lease release requires a stopped app and unchanged project root")
+        second = self.bridge.call("inspect", cancelled=cancelled)
+        second_state = second.get("state", {})
+        if (not stopped(second_state) or second_state.get("fingerprint") != first_fingerprint
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Owned lease release requires two stable stopped-app observations")
+        current_lease = self.read("lease.json")
+        if (current_lease != lease or self.read("operation.json") is not None
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Lease or pending operation changed before stopped-app release")
 
     def path(self, value, *, new=False):
         if (not isinstance(value, str) or not value or any(ord(c) < 32 for c in value)

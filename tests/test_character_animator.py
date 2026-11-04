@@ -276,6 +276,86 @@ class CharacterOwnershipTests(unittest.TestCase):
         observed = self.client.inspect()
         return self.client.session("claim", "fixture", observed["project_id"])
 
+    def owned_lease_after_app_exit(self):
+        root = (self.root / "workspace/copies" / f"OwnedProject-{len(self.native.calls)}").resolve()
+        (root / "Ch Data").mkdir(parents=True)
+        (root / "OwnedProject.chproj").write_bytes(b"fixture")
+        application = "/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app"
+        self.native.state.update(bundle_id="com.adobe.Character-Animator.application",
+                                 application=application, running=True, process_count=1,
+                                 bundle_process_count=1, pid=99, launch_time=99.0,
+                                 project_roots=[str(root)], authentication_or_permission_prompt=False)
+        observed = self.client.inspect()
+        lease = self.client.session("claim", "fixture-owned", observed["project_id"])
+        record = self.client.read("lease.json")
+        record.update(owned_root=str(root), owned_root_identity=self.client._directory_identity(root))
+        write_json(self.client.directory / "lease.json", record)
+        self.native.state.update(running=False, process_count=0, bundle_process_count=0,
+                                 pid=None, launch_time=None, project_roots=[], fingerprint="stopped")
+        self.native.state.pop("project_roots", None)
+        self.native.state.pop("authentication_or_permission_prompt", None)
+        return {**lease, **record}, root
+
+    def test_release_owned_lease_after_app_exit_requires_two_stable_absence_observations(self):
+        lease, root = self.owned_lease_after_app_exit()
+        calls = list(self.native.calls)
+
+        result = self.client.session("release", lease["owner"], lease["project_id"], lease["lease_id"])
+
+        self.assertEqual(result["state"], "unclaimed")
+        self.assertEqual(result["project_id"], lease["project_id"])
+        self.assertIsNone(self.client.read("lease.json"))
+        self.assertTrue(root.is_dir())
+        self.assertEqual(self.native.calls, calls + ["inspect", "inspect"])
+
+    def test_release_after_exit_rejects_wrong_lease_running_process_pending_op_and_changed_root(self):
+        cases = ("wrong lease", "running process", "pending operation", "changed root", "auth prompt")
+        for case in cases:
+            with self.subTest(case=case):
+                lease, root = self.owned_lease_after_app_exit()
+                original_lease = copy.deepcopy(self.client.read("lease.json"))
+                requested_lease = lease["lease_id"]
+                if case == "wrong lease":
+                    requested_lease = "0" * 32
+                elif case == "running process":
+                    self.native.state.update(running=True, process_count=1,
+                                             bundle_process_count=1, pid=100, launch_time=100.0,
+                                             project_roots=[str(root)])
+                elif case == "pending operation":
+                    write_json(self.client.directory / "operation.json", {"operation_id": "1" * 32})
+                elif case == "changed root":
+                    moved = root.with_name("OwnedProject-moved")
+                    root.rename(moved)
+                    root.mkdir()
+                elif case == "auth prompt":
+                    self.native.state.update(authentication_or_permission_prompt=True)
+                with self.assertRaises(CharacterRejected):
+                    self.client.session("release", lease["owner"], lease["project_id"], requested_lease)
+                self.assertEqual(self.client.read("lease.json"), original_lease)
+                if case == "pending operation":
+                    self.assertEqual(self.client.read("operation.json"), {"operation_id": "1" * 32})
+                    (self.client.directory / "operation.json").unlink()
+                (self.client.directory / "lease.json").unlink()
+
+    def test_release_after_exit_rejects_a_changed_second_native_observation(self):
+        lease, _ = self.owned_lease_after_app_exit()
+        original_lease = copy.deepcopy(self.client.read("lease.json"))
+        original_call = self.native.call
+        inspect_count = 0
+
+        def changed_second_inspect(operation, *args, **kwargs):
+            nonlocal inspect_count
+            if operation == "inspect":
+                inspect_count += 1
+                if inspect_count == 2:
+                    self.native.state.update(bundle_process_count=1, fingerprint="bundle-process-running")
+            return original_call(operation, *args, **kwargs)
+
+        with (patch.object(self.native, "call", side_effect=changed_second_inspect),
+              self.assertRaisesRegex(CharacterRejected, "two stable stopped-app observations")):
+            self.client.session("release", lease["owner"], lease["project_id"], lease["lease_id"])
+        self.assertEqual(self.client.read("lease.json"), original_lease)
+
     @MACOS_ONLY
     def test_prepare_closed_copy_open_exact_root_and_claim_inode_ownership(self):
         source = self.closed_character_project()
