@@ -281,6 +281,22 @@ final class Observation {
                 }
                 focusedElement = axElement(attribute(candidate, "AXParent"))
             }
+            if let focused = observation.focusedWindow,
+               text(focused, "AXIdentifier") == "GoToWindow",
+               text(focused, "AXRole") == "AXSheet" {
+                var parent = axElement(attribute(focused, "AXParent"))
+                for _ in 0..<16 {
+                    guard let candidate = parent else { break }
+                    var candidatePID: pid_t = 0
+                    guard AXUIElementGetPid(candidate, &candidatePID) == .success,
+                          candidatePID == application.processIdentifier else { break }
+                    if text(candidate, "AXRole") == "AXWindow",
+                       !windows.contains(where: { CFEqual($0, candidate) }) {
+                        windows.append(candidate)
+                    }
+                    parent = axElement(attribute(candidate, "AXParent"))
+                }
+            }
             var budget = 512, truncated = false
             progress("observe_tree_started", details: ["windows": windows.count])
             func walk(_ element: AXUIElement, depth: Int, path: String) -> [String: Any] {
