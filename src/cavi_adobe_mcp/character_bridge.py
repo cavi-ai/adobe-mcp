@@ -181,6 +181,14 @@ class NativeBridge:
                         error.get("submission_may_have_started")
                         if type(error.get("submission_may_have_started")) is bool else None
                     ),
+                    "targeted_confirmation_may_have_started": (
+                        error.get("targeted_confirmation_may_have_started")
+                        if type(error.get("targeted_confirmation_may_have_started")) is bool else None
+                    ),
+                    "targeted_navigation_may_have_started": (
+                        error.get("targeted_navigation_may_have_started")
+                        if type(error.get("targeted_navigation_may_have_started")) is bool else None
+                    ),
                     "continuation_diagnostics": diagnostics if isinstance(diagnostics, dict) else None,
                 }
                 if progress_log:

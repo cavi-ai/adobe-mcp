@@ -17,7 +17,11 @@ from cavi_mcp_core.contracts import failure
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from cavi_adobe_mcp.character_animator import CharacterAnimator, write_json
+from cavi_adobe_mcp.character_animator import (
+    CharacterAnimator,
+    _may_resume_atomic_continuation,
+    write_json,
+)
 from cavi_adobe_mcp.character_bridge import CharacterRejected, CharacterUnknown
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +36,7 @@ class NativeFixture:
         self.state["windows"] = []
         self.calls = []
         self.last_continue_chooser_parameters = None
+        self.last_import_parameters = None
         self.fail = False
         self.directory_transition = False
         self.fail_submit = False
@@ -50,6 +55,8 @@ class NativeFixture:
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
         self.calls.append(operation)
+        if operation == "import":
+            self.last_import_parameters = copy.deepcopy(parameters or {})
         if expected is not None and expected["fingerprint"] != self.state["fingerprint"]:
             raise CharacterRejected("Stale observation", "STALE_STATE")
         if (operation == "chooser_destination"
@@ -173,7 +180,8 @@ class NativeFixture:
             if kind == "export_png_wav" and self.fail_export_destination:
                 error = CharacterRejected("Fixture pre-dispatch export state changed", "STALE_STATE")
                 error.native_context = {"phase": "chooser_continue_preflight",
-                                        "submission_may_have_started": False}
+                                        "submission_may_have_started": False,
+                                        "targeted_confirmation_may_have_started": False}
                 raise error
             if ((kind == "export_png_wav" and self.fail_export_submit)
                     or (kind == "import" and self.fail_continue_import_unknown)):
@@ -910,6 +918,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.last_continue_chooser_parameters["operation_id"],
                          result["operation_id"])
         self.assertEqual(self.native.calls[len(before_import):].count("import"), 1)
+        self.assertTrue(self.native.last_import_parameters["targeted_input"])
         self.assertEqual(self.native.calls[len(before_import):].count("chooser_destination"), 0)
         self.assertEqual(self.native.calls[len(before_import):].count("continue_chooser"), 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
@@ -1042,6 +1051,8 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.fail_export_submit = True
         self.native.continue_chooser_error_context = {
             "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+            "targeted_confirmation_may_have_started": False,
+            "targeted_navigation_may_have_started": False,
             "continuation_diagnostics": {"stage": "go_to_sheet", "last_ready": True,
                                          "fingerprint_stable": False, "observations": 4},
         }
@@ -1260,7 +1271,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(resumed["status"], "native_import_submitted")
-        self.assertTrue(self.native.last_continue_chooser_parameters["ax_only"])
+        self.assertTrue(self.native.last_continue_chooser_parameters["targeted_input"])
         self.assertEqual(self.native.calls.count("import"), 1)
         self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
@@ -1288,7 +1299,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
-        self.assertFalse(self.native.last_continue_chooser_parameters["ax_only"])
+        self.assertFalse(self.native.last_continue_chooser_parameters["targeted_input"])
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
@@ -1320,6 +1331,8 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.fail_continue_import_unknown = True
         self.native.continue_chooser_error_context = {
             "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+            "targeted_confirmation_may_have_started": False,
+            "targeted_navigation_may_have_started": False,
             "continuation_diagnostics": {"stage": "go_to_sheet", "last_ready": True,
                                          "fingerprint_stable": False, "observations": 5},
         }
@@ -1336,7 +1349,7 @@ class CharacterOwnershipTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(result["operation_id"], operation_id)
-        self.assertTrue(self.native.last_continue_chooser_parameters["ax_only"])
+        self.assertTrue(self.native.last_continue_chooser_parameters["targeted_input"])
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), 2)
 
@@ -1359,6 +1372,27 @@ class CharacterOwnershipTests(unittest.TestCase):
 
         self.assertEqual(self.native.calls.count("continue_chooser"), calls)
 
+    def test_continue_import_does_not_repeat_targeted_directory_confirmation(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_continue_import_unknown = True
+        self.native.continue_chooser_error_context = {
+            "phase": "directory_confirm", "submission_may_have_started": False,
+            "targeted_confirmation_may_have_started": True,
+            "targeted_navigation_may_have_started": False,
+        }
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        calls = self.native.calls.count("continue_chooser")
+        self.native.fail_continue_import_unknown = False
+
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.native.calls.count("continue_chooser"), calls)
+
     def test_continue_import_rejects_changed_process_before_native_dispatch(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
@@ -1366,6 +1400,8 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.fail_continue_import_unknown = True
         self.native.continue_chooser_error_context = {
             "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+            "targeted_confirmation_may_have_started": False,
+            "targeted_navigation_may_have_started": False,
         }
         with self.assertRaises(CharacterUnknown):
             self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
@@ -1382,6 +1418,27 @@ class CharacterOwnershipTests(unittest.TestCase):
         retained = self.client.inspect()["pending_operation"]
         self.assertEqual(retained["operation_id"], pending["operation_id"])
         self.assertEqual(retained["state"], "unknown")
+
+    def test_atomic_continuation_requires_explicit_confirmation_state(self):
+        packet = {"atomic_continuation_attempted": True, "native_continuation": {
+            "phase": "directory_confirm", "submission_may_have_started": False,
+            "targeted_confirmation_may_have_started": False,
+            "targeted_navigation_may_have_started": False,
+        }}
+        self.assertTrue(_may_resume_atomic_continuation(packet))
+        for value in (None, "false", True):
+            with self.subTest(value=value):
+                packet["native_continuation"]["targeted_confirmation_may_have_started"] = value
+                self.assertFalse(_may_resume_atomic_continuation(packet))
+        packet["native_continuation"].pop("targeted_confirmation_may_have_started")
+        self.assertFalse(_may_resume_atomic_continuation(packet))
+        packet["native_continuation"]["targeted_confirmation_may_have_started"] = False
+        for value in (None, "false", True):
+            with self.subTest(navigation=value):
+                packet["native_continuation"]["targeted_navigation_may_have_started"] = value
+                self.assertFalse(_may_resume_atomic_continuation(packet))
+        packet["native_continuation"].pop("targeted_navigation_may_have_started")
+        self.assertFalse(_may_resume_atomic_continuation(packet))
 
     def test_continue_import_rejects_unparented_go_to_modal_under_import_focus(self):
         lease = self.claim()

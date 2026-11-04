@@ -39,6 +39,8 @@ def _may_resume_atomic_continuation(packet):
     context = packet.get("native_continuation")
     return (isinstance(context, dict)
             and context.get("submission_may_have_started") is False
+            and context.get("targeted_confirmation_may_have_started") is False
+            and context.get("targeted_navigation_may_have_started") is False
             and isinstance(context.get("phase"), str) and bool(context["phase"]))
 
 
@@ -920,7 +922,7 @@ class CharacterAnimator:
                 raise CharacterUnknown("Import requires the exact owned project root")
             arguments = {"kind": "import", "directory": str(staged.parent),
                          "basename": staged.name, "project_root": roots[0],
-                         "expected_sha256": staged_digest}
+                         "expected_sha256": staged_digest, "targeted_input": True}
             selected = step("continue_chooser", arguments)
             if selected.get("result", {}).get("status") != "native_chooser_submitted":
                 raise CharacterUnknown("Native import chooser was not submitted")
@@ -940,7 +942,7 @@ class CharacterAnimator:
                                     "bytes": staged.stat().st_size},
                     "native": after, "source_identity": "hashed_private_import_copy"}
 
-        return self.mutate("import", {}, lease_id, cancelled=cancelled, continuation=finish,
+        return self.mutate("import", {"targeted_input": True}, lease_id, cancelled=cancelled, continuation=finish,
                            adopt_existing_import=True,
                            intent={"source": str(original), "source_sha256": source_digest,
                                    "source_bytes": before.st_size,
@@ -1446,7 +1448,7 @@ class CharacterAnimator:
                              "kind": "import", "directory": str(staged.parent),
                              "basename": staged.name, "project_root": source_root,
                              "expected_sha256": intent["import_copy_sha256"],
-                             "ax_only": existing_go_to or selected_import}
+                             "targeted_input": existing_go_to or selected_import}
 
                 try:
                     packet.pop("native_continuation", None)

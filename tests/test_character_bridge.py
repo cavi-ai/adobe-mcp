@@ -105,6 +105,8 @@ class CharacterBridgeRequestTests(unittest.TestCase):
         response = {"version": 1, "operation": "continue_chooser", "ok": False,
                     "error": {"code": "OUTCOME_UNKNOWN", "outcome": "unknown",
                               "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+                              "targeted_confirmation_may_have_started": True,
+                              "targeted_navigation_may_have_started": False,
                               "continuation_diagnostics": {"stage": "go_to_sheet", "last_ready": True,
                                                            "fingerprint_stable": False, "observations": 5},
                               "message": "observed chooser did not settle"}}
@@ -129,6 +131,8 @@ class CharacterBridgeRequestTests(unittest.TestCase):
             context = raised.exception.native_context
             self.assertEqual(context["phase"], "go_to_sheet_readiness")
             self.assertIs(context["submission_may_have_started"], False)
+            self.assertIs(context["targeted_confirmation_may_have_started"], True)
+            self.assertIs(context["targeted_navigation_may_have_started"], False)
             self.assertEqual(context["continuation_diagnostics"], {
                 "stage": "go_to_sheet", "last_ready": True,
                 "fingerprint_stable": False, "observations": 5,
