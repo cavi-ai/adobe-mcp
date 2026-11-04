@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 - 2026-11-04
+
+### Added
+
+- Prepare, open and claim a verified workspace copy of a closed Character Animator project.
 ## 0.2.3 - 2026-11-04
 
 ### Fixed
