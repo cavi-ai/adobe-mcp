@@ -362,6 +362,26 @@ final class Observation {
               expected["launch_time"] as? Double == observation.state["launch_time"] as? Double,
               expected["fingerprint"] as? String == observation.state["fingerprint"] as? String else { try fail("STALE_STATE", "Inspect again; process, window or precondition fingerprint differs") }
     }
+    func expectedFocusIdentity(_ request: [String: Any], observation: Observation) throws {
+        guard let app = observation.application,
+              observation.state["accessibility_trusted"] as? Bool == true else {
+            try fail("APPLICATION_UNAVAILABLE", "An already running app and existing Accessibility permission are required")
+        }
+        guard observation.state["authentication_or_permission_prompt"] as? Bool != true else {
+            try fail("AUTHENTICATION_BOUNDARY", "Application authentication or permission prompt requires manual handling")
+        }
+        guard let expected = request["expected"] as? [String: Any],
+              expected["bundle_id"] as? String == characterBundleID,
+              observation.state["bundle_id"] as? String == characterBundleID,
+              expected["application"] as? String == applicationURL.path,
+              observation.state["application"] as? String == applicationURL.path,
+              expected["pid"] as? Int == Int(app.processIdentifier),
+              observation.state["pid"] as? Int == Int(app.processIdentifier),
+              expected["launch_time"] as? Double == observation.state["launch_time"] as? Double,
+              expected["project_roots"] as? [String] == observation.state["project_roots"] as? [String] else {
+            try fail("STALE_STATE", "The observed application, process, launch or project identity changed before activation")
+        }
+    }
     func ownedRoot(_ parameters: [String: Any], _ observation: Observation) throws {
         guard let requested = parameters["project_root"] as? String, requested.hasPrefix("/"),
               let roots = observation.state["project_roots"] as? [String], roots == [requested] else {
@@ -448,6 +468,64 @@ final class Observation {
             && observation.nodes.filter {
                 text($0.0, "AXIdentifier") == panelID && text($0.0, "AXTitle") == title
             }.count == 1
+    }
+    func typedChooserIsObserved(_ observation: Observation, kind: String) -> Bool {
+        let titles = ["save_as": "Save Project As", "import": "Import",
+                      "export_png_wav": "Export Scene", "open_project": "Open Project"]
+        guard let title = titles[kind] else { return false }
+        let panelID = kind == "import" || kind == "open_project" ? "open-panel" : "save-panel"
+        let panels = observation.nodes.filter {
+            text($0.0, "AXIdentifier") == panelID && text($0.0, "AXTitle") == title
+                && bool($0.0, "AXModal") == true
+        }
+        guard panels.count == 1 else { return safeBackgroundMain(observation) }
+        return typedChooserIsFocused(observation, kind: kind)
+            || hasOnlyExpectedChooserModal(observation, kind: kind)
+    }
+    func safeBackgroundMain(_ observation: Observation) -> Bool {
+        guard observation.state["frontmost"] as? Bool == false,
+              let focused = observation.focusedWindow,
+              text(focused, "AXRole") == "AXLayoutArea",
+              bool(focused, "AXModal") != true,
+              let focusedTitle = text(focused, "AXTitle"),
+              let focusedFrame = frame(focused) else { return false }
+        let matchingWindows = observation.nodes.filter { element, _ in
+            text(element, "AXRole") == "AXLayoutArea"
+                && text(element, "AXTitle") == focusedTitle
+                && frame(element) == focusedFrame
+                && bool(element, "AXModal") != true
+        }
+        return matchingWindows.count == 1 && hasNoUnrelatedModal(observation)
+    }
+    func hasNoUnrelatedModal(_ observation: Observation) -> Bool {
+        !observation.nodes.contains { element, _ in
+            bool(element, "AXModal") == true || text(element, "AXRole") == "AXSheet"
+        }
+    }
+    func hasOnlyExpectedChooserModal(_ observation: Observation, kind: String) -> Bool {
+        let titles = ["save_as": "Save Project As", "import": "Import",
+                      "export_png_wav": "Export Scene", "open_project": "Open Project"]
+        guard let title = titles[kind] else { return false }
+        let panelID = kind == "import" || kind == "open_project" ? "open-panel" : "save-panel"
+        let panels = observation.nodes.filter {
+            text($0.0, "AXIdentifier") == panelID && text($0.0, "AXTitle") == title
+                && bool($0.0, "AXModal") == true
+        }
+        guard panels.count == 1 else { return false }
+        let panel = panels[0].0
+        return observation.nodes.allSatisfy { element, _ in
+            let role = text(element, "AXRole")
+            guard bool(element, "AXModal") == true || role == "AXSheet" else { return true }
+            if CFEqual(element, panel) { return true }
+            guard role == "AXSheet", text(element, "AXIdentifier") == "GoToWindow" else { return false }
+            var parent = axElement(attribute(element, "AXParent"))
+            for _ in 0..<16 {
+                guard let current = parent else { return false }
+                if CFEqual(current, panel) { return true }
+                parent = axElement(attribute(current, "AXParent"))
+            }
+            return false
+        }
     }
     func node(_ observation: Observation, identifier: String, role: String? = nil) throws -> AXUIElement {
         let candidates = observation.nodes.filter { text($0.0, "AXIdentifier") == identifier && (role == nil || text($0.0, "AXRole") == role) }
@@ -1137,7 +1215,11 @@ final class Observation {
             return ["state": observation.state, "result": try await capture(observation, parameters: parameters)]
         }
         phase = "precondition"
-        try expected(request, observation: observation)
+        if operation == "focus" {
+            try expectedFocusIdentity(request, observation: observation)
+        } else {
+            try expected(request, observation: observation)
+        }
         if operation == "chooser_continue_directory" {
             let result = try await continueDirectoryEntry(observation, parameters: parameters)
             return ["state": try observe().state, "result": result]
@@ -1148,12 +1230,20 @@ final class Observation {
             guard ["save_as", "import", "export_png_wav", "open_project"].contains(kind) else {
                 try fail("INVALID_ARGUMENT", "Focus requires an exact supported chooser kind")
             }
+            guard typedChooserIsObserved(observation, kind: kind),
+                  (safeBackgroundMain(observation) || hasOnlyExpectedChooserModal(observation, kind: kind)) else {
+                try fail("CHOOSER_MISMATCH", "Activation requires the exact same-process native chooser and no unrelated modal")
+            }
             try await focusApplication(observation)
             let after = try observe()
             try ownedRoot(parameters, after)
             guard (after.state["pid"] as? Int) == (observation.state["pid"] as? Int),
-                  (after.state["launch_time"] as? String) == (observation.state["launch_time"] as? String),
+                  (after.state["launch_time"] as? Double) == (observation.state["launch_time"] as? Double),
+                  after.state["bundle_id"] as? String == characterBundleID,
+                  after.state["application"] as? String == applicationURL.path,
                   after.state["authentication_or_permission_prompt"] as? Bool != true,
+                  after.state["frontmost"] as? Bool == true,
+                  hasOnlyExpectedChooserModal(after, kind: kind),
                   typedChooserIsFocused(after, kind: kind) else {
                 try fail("CHOOSER_MISMATCH", "After activation, the same process must expose the requested chooser without a prompt")
             }

@@ -88,11 +88,13 @@ class NativeFixture:
             self.state["windows"] = [{"modal": True, "identifier": "save-panel",
                                        "title": "Save Project As"}]
             if self.hide_chooser_after_command:
+                main_title = self.state.get("main_title", "Character Animator")
+                main_frame = [0, 39, 2056, 1290]
                 self.state.update(frontmost=False, fingerprint="background-main",
                                   focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                  "title": "Character Animator"},
-                                  windows=[{"identifier": "main-window", "role": "AXWindow",
-                                            "title": "Character Animator", "modal": False}])
+                                                  "title": main_title, "frame": main_frame},
+                                  windows=[{"identifier": "main-window", "role": "AXLayoutArea",
+                                            "title": main_title, "modal": False, "frame": main_frame}])
         if operation == "chooser_destination":
             self.state["fingerprint"] = "go-to"
             self.state["focused_window"] = {"identifier": "GoToWindow", "role": "AXSheet"}
@@ -547,6 +549,7 @@ class CharacterOwnershipTests(unittest.TestCase):
 
     def test_copy_and_resume_activate_background_window_then_recheck_exact_chooser(self):
         self.native.hide_chooser_after_command = True
+        self.native.state["main_title"] = "Adobe Character Animator 2026"
         lease = self.claim()
         copied = self.client.save_copy("copies", "Owned", lease["lease_id"])
         self.assertEqual(copied["status"], "owned_copy")
@@ -557,9 +560,11 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.fail = False
         self.native.state.update(frontmost=False, fingerprint="background-resume",
                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                 "title": "Character Animator"},
-                                 windows=[{"identifier": "main-window", "role": "AXWindow",
-                                           "title": "Character Animator", "modal": False}])
+                                                 "title": "Adobe Character Animator 2026",
+                                                 "frame": [0, 39, 2056, 1290]},
+                                 windows=[{"identifier": "main-window", "role": "AXLayoutArea",
+                                           "title": "Adobe Character Animator 2026", "modal": False,
+                                           "frame": [0, 39, 2056, 1290]}])
         result = self.client.operation_control("continue_copy", packet["operation_id"], lease["lease_id"])
         self.assertEqual(result["status"], "owned_copy")
         self.assertEqual(self.native.calls.count("focus"), 3)
@@ -657,11 +662,12 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.native.state["fingerprint"] = "existing-import"
         self.native.state["frontmost"] = False
         self.native.state["focused_window"] = {"identifier": "main-window", "role": "AXLayoutArea",
-                                                "title": "Character Animator"}
+                                                "title": "Adobe Character Animator 2026",
+                                                "frame": [0, 39, 2056, 1290]}
         self.native.state["windows"] = [
             {"identifier": "open-panel", "title": "Import", "modal": True},
-            {"identifier": "main-window", "role": "AXLayoutArea", "title": "Character Animator",
-             "modal": False},
+            {"identifier": "main-window", "role": "AXLayoutArea", "title": "Adobe Character Animator 2026",
+             "modal": False, "frame": [0, 39, 2056, 1290]},
         ]
         calls_before = list(self.native.calls)
 
