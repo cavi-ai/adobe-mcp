@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -108,7 +109,9 @@ class BuildHelperTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "NATIVE_HELPER_UNAVAILABLE")
 
 
-@unittest.skipUnless(shutil.which("swiftc", path="/usr/bin:/usr/local/bin"), "needs swiftc")
+# The helpers link macOS frameworks; a Linux swiftc cannot build them.
+@unittest.skipUnless(sys.platform == "darwin" and shutil.which("swiftc", path="/usr/bin:/usr/local/bin"),
+                     "needs macOS and swiftc")
 class ShippedHelperTests(unittest.TestCase):
     def test_every_shipped_helper_compiles(self):
         for source in sorted(PACKAGE.glob("*_native.swift")):

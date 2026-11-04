@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 - 2026-11-04
+
+### Fixed
+
+- The shipped Swift helper build test runs only on macOS, so Linux CI and release runs with a Swift toolchain pass.
+
 ## 0.2.2 - 2026-11-04
 
 ### Changed
