@@ -4,7 +4,14 @@
 
 ### Fixed
 
-- Character Animator can resume an expired first-copy lease and reconcile a recorded unsubmitted Save As stage.
+- Character Animator reactivates a background owned chooser only after checking the expected project, process, and chooser.
+
+## 0.1.1 - 2026-11-04
+
+### Fixed
+
+- Reconcile recorded initial Save As directory requests after stable source and absent-destination checks.
+- Validate initial project-copy paths before continuing a pending save.
 
 ## 0.1.0 - 2026-11-04
 
