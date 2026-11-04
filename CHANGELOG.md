@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Keep Character Animator ownership responses stable while opening a prepared project copy.
 - Character Animator reactivates a background owned chooser only after checking the expected project, process, and chooser.
 - Character Animator export continuation resumes the recorded chooser step and verifies a stable chooser state before the next command.
 

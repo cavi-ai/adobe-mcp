@@ -212,18 +212,17 @@ async def capture(directory: str) -> CharacterCapture:
 
 
 @mcp.tool(annotations=WRITE)
-async def session_control(action: Literal["inspect", "claim", "renew", "release", "resume",
-                                          "open_prepared_copy"],
+async def session_control(action: Literal["inspect", "claim", "renew", "release", "resume"],
                           owner: str | None = None, expected_project: str | None = None,
                           lease_id: str | None = None,
                           ttl_seconds: Annotated[StrictInt, Field(ge=30, le=3600)] = 600,
                           pending_operation_id: str | None = None,
-                          prepared_copy_id: str | None = None) -> CharacterOwnership | CharacterPreparedOpen:
+                          prepared_copy_id: str | None = None) -> CharacterOwnership:
     """Claim, renew, release, or resume a matching expired lease for one unknown operation.
 
     Resume requires the expired lease ID, same owner, project ID and exact unknown operation ID. It renews
-    ownership after process/root checks and dispatches no native command or chooser action. Open a prepared
-    copy only by its private ID; inspect that exact native root before claiming it.
+    ownership after process/root checks and dispatches no native command or chooser action. Claiming a
+    prepared copy requires its private ID and a fresh observation of that exact native root.
     """
     return await execute(lambda cancelled: client().session(action, owner, expected_project,
                                                            lease_id, ttl_seconds, cancelled,
@@ -238,6 +237,16 @@ async def project_prepare_copy(source: str, destination: str) -> CharacterPrepar
     use its prepared_copy_id with session_control to open the exact copy and then claim it.
     """
     return await execute(lambda cancelled: client().prepare_copy(source, destination, cancelled))
+
+
+@mcp.tool(annotations=WRITE)
+async def project_open_prepared_copy(prepared_copy_id: str) -> CharacterPreparedOpen:
+    """Open only the exact closed-project copy previously prepared by project_prepare_copy.
+
+    Inspect the opened native root, then claim it with session_control and the same prepared_copy_id.
+    """
+    return await execute(lambda cancelled: client().session(
+        "open_prepared_copy", cancelled=cancelled, prepared_copy_id=prepared_copy_id))
 
 
 @mcp.tool(annotations=MUTATE)

@@ -652,6 +652,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         source = self.root / "workspace/voice.wav"
         source.write_bytes(b"fixture WAV bytes")
         self.native.state["fingerprint"] = "existing-import"
+        self.native.state["frontmost"] = False
         self.native.state["focused_window"] = {"identifier": "open-panel", "title": "Import",
                                                 "modal": True}
         self.native.state["windows"] = [{"identifier": "open-panel", "title": "Import",
@@ -661,6 +662,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         result = self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(self.native.calls[len(calls_before):].count("focus"), 1)
         self.assertEqual(self.native.calls[len(calls_before):].count("import"), 0)
         self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 1)
         archived = self.client.read("operations/" + result["operation_id"] + ".json")
@@ -1497,16 +1499,21 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                 for tool in tools.values():
                     self.assertTrue(tool.output_schema["required"], tool.name)
-                session_result = tools["session_control"].output_schema["properties"]["result"]["anyOf"]
-                self.assertEqual(len(session_result), 2)
+                self.assertIn("project_id", tools["session_control"].output_schema["properties"])
+                self.assertNotIn("result", tools["session_control"].output_schema["properties"])
                 self.assertIn("resume", tools["session_control"].input_schema["properties"]["action"]["enum"])
-                self.assertIn("open_prepared_copy",
-                              tools["session_control"].input_schema["properties"]["action"]["enum"])
+                self.assertNotIn("open_prepared_copy",
+                                 tools["session_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("pending_operation_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("prepared_copy_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("project_prepare_copy", tools)
                 self.assertIn("prepared_copy_id",
                               tools["project_prepare_copy"].output_schema["properties"])
+                self.assertIn("project_open_prepared_copy", tools)
+                self.assertIn("prepared_copy_id",
+                              tools["project_open_prepared_copy"].input_schema["properties"])
+                self.assertIn("prepared_copy_opened",
+                              tools["project_open_prepared_copy"].output_schema["properties"]["status"]["enum"])
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("reconcile_unsubmitted_copy",

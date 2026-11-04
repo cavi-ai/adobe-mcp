@@ -75,7 +75,7 @@ keep them private.
 
 For a closed Character Animator project, use `project_prepare_copy` to copy its saved
 `.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
-`prepared_copy_id` to `session_control(action="open_prepared_copy")`, inspect the actual
+`prepared_copy_id` to `project_open_prepared_copy`, inspect the actual
 opened project root, then use `session_control(action="claim", prepared_copy_id=...)` to
 establish ownership before editing. Open and claim operate on that exact prepared copy.
 

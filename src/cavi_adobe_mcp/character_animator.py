@@ -543,6 +543,57 @@ class CharacterAnimator:
                 and any(window.get("identifier") == panel[0] and window.get("title") == panel[1]
                         for window in state.get("windows", []) if isinstance(window, dict)))
 
+    def _focus_owned_chooser(self, observed, kind, project_root, cancelled, allow_go_to):
+        state = observed.get("state", {})
+        focused = state.get("focused_window") or {}
+        windows = [window for window in state.get("windows", []) if isinstance(window, dict)]
+        panels = {"save_as": ("save-panel", "Save Project As"),
+                  "import": ("open-panel", "Import"),
+                  "export_png_wav": ("save-panel", "Export Scene")}
+        panel = panels.get(kind)
+        if (panel is None or state.get("project_roots") != [project_root]
+                or state.get("authentication_or_permission_prompt") is True):
+            raise CharacterRejected("The same owned project without a prompt is required for chooser activation")
+        parent_visible = any(window.get("identifier") == panel[0]
+                             and window.get("title") == panel[1] for window in windows)
+
+        def expected_modal(window):
+            if window.get("identifier") == panel[0] and window.get("title") == panel[1]:
+                return True
+            return (allow_go_to and parent_visible and window.get("identifier") == "GoToWindow"
+                    and window.get("role") == "AXSheet")
+
+        modal_windows = [window for window in windows
+                         if window.get("modal") is True or window.get("role") == "AXSheet"]
+        focused_modal = focused.get("modal") is True or focused.get("role") == "AXSheet"
+        if (not all(expected_modal(window) for window in modal_windows)
+                or (focused_modal and not expected_modal(focused))):
+            raise CharacterRejected("An unrelated native modal blocks chooser activation")
+
+        chooser = self._chooser_visible(state, kind, allow_go_to)
+        background_main = (state.get("frontmost") is False
+                           and focused.get("role") == "AXLayoutArea"
+                           and focused.get("title") == "Character Animator"
+                           and not modal_windows and not focused_modal)
+        if state.get("frontmost") is True and chooser:
+            return observed
+        if not chooser and not background_main:
+            if kind == "import":
+                raise CharacterRejected("Continue requires the exact existing Import or Go To chooser, or a safe background main window")
+            raise CharacterRejected("The exact owned chooser or safe background main window is required")
+        activated = self.bridge.call("focus", {"kind": kind, "project_root": project_root},
+                                     expected=state, cancelled=cancelled)
+        activated_state = activated.get("state", {})
+        if (project_identity(activated_state) != project_identity(state)
+                or activated_state.get("project_roots") != [project_root]
+                or (activated_state.get("pid"), activated_state.get("launch_time"))
+                   != (state.get("pid"), state.get("launch_time"))
+                or activated_state.get("frontmost") is not True
+                or activated_state.get("authentication_or_permission_prompt") is True
+                or not self._chooser_visible(activated_state, kind, allow_go_to)):
+            raise CharacterRejected("Activation did not expose the same-process owned chooser")
+        return activated
+
     def mutate(self, operation, parameters, lease_id, *, owned=True, cancelled=None,
                continuation=None, intent=None, expected_fingerprint=None,
                adopt_existing_import=False):
@@ -625,43 +676,24 @@ class CharacterAnimator:
                         if command in ("chooser_destination", "chooser_continue_directory"):
                             kind = arguments.get("kind")
                             allow_go_to = command == "chooser_continue_directory"
-                            if not self._chooser_visible(current["state"], kind, allow_go_to):
-                                state = current["state"]
-                                focused = state.get("focused_window") or {}
-                                main_window = (state.get("frontmost") is False
-                                               and focused.get("role") == "AXLayoutArea"
-                                               and focused.get("title") == "Character Animator")
-                                modal = (focused.get("modal") is True
-                                         or any(window.get("modal") is True or window.get("role") == "AXSheet"
-                                                for window in state.get("windows", [])
-                                                if isinstance(window, dict)))
-                                if (not main_window or modal
-                                        or state.get("authentication_or_permission_prompt") is True):
-                                    raise CharacterRejected("Native chooser is unavailable and the app is not a safe background main window")
-                                activated = self.bridge.call(
-                                    "focus", {"kind": kind, "project_root": arguments.get("project_root")},
-                                    expected=state, cancelled=cancelled)
-                                activated_state = activated.get("state", {})
-                                if (project_identity(activated_state) != project_identity(native["state"])
-                                        or activated_state.get("project_roots") != [arguments.get("project_root")]
-                                        or (activated_state.get("pid"), activated_state.get("launch_time"))
-                                        != (state.get("pid"), state.get("launch_time"))
-                                        or activated_state.get("frontmost") is not True
-                                        or activated_state.get("authentication_or_permission_prompt") is True
-                                        or not self._chooser_visible(activated_state, kind, allow_go_to=True)):
-                                    raise CharacterRejected("Activation did not expose the exact same-process native chooser")
-                                current = activated
-                                previous = activated_state.get("fingerprint")
+                            if (not self._chooser_visible(current["state"], kind, allow_go_to)
+                                    or current["state"].get("frontmost") is not True):
+                                current = self._focus_owned_chooser(
+                                    current, kind, arguments.get("project_root"), cancelled, allow_go_to)
                             deadline = time.monotonic() + 5
                             previous = current["state"].get("fingerprint")
                             stable = False
                             while time.monotonic() < deadline:
                                 time.sleep(.1)
                                 settled = self.bridge.call("inspect", cancelled=cancelled)
-                                if project_identity(settled["state"]) != project_identity(native["state"]):
-                                    raise CharacterUnknown("Native project changed while the Save As panel settled")
+                                settled_state = settled["state"]
+                                if (project_identity(settled_state) != project_identity(native["state"])
+                                        or settled_state.get("project_roots") != [arguments.get("project_root")]
+                                        or settled_state.get("authentication_or_permission_prompt") is True):
+                                    raise CharacterUnknown("Native project or prompt changed while the chooser settled")
                                 fingerprint = settled["state"].get("fingerprint")
                                 if (self._chooser_visible(settled["state"], kind, allow_go_to)
+                                        and settled["state"].get("frontmost") is True
                                         and fingerprint == previous):
                                     current = settled
                                     stable = True
@@ -1130,27 +1162,9 @@ class CharacterAnimator:
 
                 current_phase = export_phase(state)
                 if current_phase is None or state.get("frontmost") is not True:
-                    main_window = (state.get("frontmost") is False
-                                   and focus.get("role") == "AXLayoutArea"
-                                   and focus.get("title") == "Character Animator")
-                    windows = state.get("windows", [])
-                    modal = (focus.get("modal") is True
-                             or any(window.get("modal") is True or window.get("role") == "AXSheet"
-                                    for window in windows if isinstance(window, dict)))
-                    if (not main_window or modal):
-                        raise CharacterRejected("Continue requires the exact Export Scene chooser or a background main window for guarded activation")
-                    activated = self.bridge.call("focus", {"kind": "export_png_wav", "project_root": source_root},
-                                                 expected=state, cancelled=cancelled)
-                    activated_state = activated.get("state", {})
-                    if (project_identity(activated_state) != packet["before_project_id"]
-                            or activated_state.get("project_roots") != [source_root]
-                            or (activated_state.get("pid"), activated_state.get("launch_time"))
-                            != (state.get("pid"), state.get("launch_time"))
-                            or activated_state.get("frontmost") is not True
-                            or activated_state.get("authentication_or_permission_prompt") is True
-                            or not self._chooser_visible(activated_state, "export_png_wav", True)):
-                        raise CharacterRejected("Activation did not expose the exact same-process Export Scene chooser")
-                    observed, state = activated, activated_state
+                    observed = self._focus_owned_chooser(
+                        observed, "export_png_wav", source_root, cancelled, allow_go_to=True)
+                    state = observed["state"]
                     current_phase = export_phase(state)
                     if current_phase is None:
                         raise CharacterRejected("Activation did not expose a typed export chooser phase")
@@ -1364,27 +1378,12 @@ class CharacterAnimator:
                     write_json(self.directory / "lease.json", lease)
                     (self.directory / "operation.json").unlink()
                     return {**result, "operation_id": operation_id, "retry_safe": False}
-                if not self._chooser_visible(state, "import", allow_go_to=True):
-                    main_window = (state.get("frontmost") is False
-                                   and focus.get("role") == "AXLayoutArea"
-                                   and focus.get("title") == "Character Animator")
-                    modal = (focus.get("modal") is True
-                             or any(window.get("modal") is True or window.get("role") == "AXSheet"
-                                    for window in state.get("windows", []) if isinstance(window, dict)))
-                    if not main_window or modal or state.get("authentication_or_permission_prompt") is True:
-                        raise CharacterRejected("Continue requires the exact existing Import or Go To chooser, or a background main window for guarded activation")
-                    activated = self.bridge.call("focus", {"kind": "import", "project_root": source_root},
-                                                 expected=state, cancelled=cancelled)
-                    activated_state = activated.get("state", {})
-                    if (project_identity(activated_state) != packet["before_project_id"]
-                            or activated_state.get("project_roots") != [source_root]
-                            or (activated_state.get("pid"), activated_state.get("launch_time"))
-                            != (state.get("pid"), state.get("launch_time"))
-                            or activated_state.get("frontmost") is not True
-                            or activated_state.get("authentication_or_permission_prompt") is True
-                            or not self._chooser_visible(activated_state, "import", allow_go_to=True)):
-                        raise CharacterRejected("Activation did not expose the exact same-process Import chooser")
-                    observed, state, focus = activated, activated_state, activated_state.get("focused_window") or {}
+                if (not self._chooser_visible(state, "import", allow_go_to=True)
+                        or state.get("frontmost") is not True):
+                    observed = self._focus_owned_chooser(
+                        observed, "import", source_root, cancelled, allow_go_to=True)
+                    state = observed["state"]
+                    focus = state.get("focused_window") or {}
                 if not ((focus.get("identifier") == "open-panel" and focus.get("title") == "Import")
                         or (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")):
                     raise CharacterRejected("Continue requires the exact existing Import or Go To chooser")
@@ -1404,6 +1403,8 @@ class CharacterAnimator:
                                 or current_state.get("project_roots") != [source_root]
                                 or current_state.get("authentication_or_permission_prompt") is True):
                             raise CharacterRejected("Project, process or prompt changed while the import chooser settled")
+                        if current_state.get("frontmost") is not True:
+                            raise CharacterRejected("The exact import chooser is no longer in the foreground")
                         current_focus = current_state.get("focused_window") or {}
                         valid_focus = ((current_focus.get("identifier") == "open-panel"
                                         and current_focus.get("title") == "Import")
