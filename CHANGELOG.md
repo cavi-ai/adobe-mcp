@@ -5,12 +5,27 @@
 ### Added
 
 - Prepare, open and claim a verified workspace copy of a closed Character Animator project.
+## 0.2.3 - 2026-11-04
+
+### Fixed
+
+- The shipped Swift helper build test runs only on macOS, so Linux CI and release runs with a Swift toolchain pass.
+
+## 0.2.2 - 2026-11-04
+
+### Changed
+
+- Releases build and test on Ubuntu runners; the unit matrix also runs on Ubuntu.
+
+## 0.2.1 - 2026-11-04
 
 ### Fixed
 
 - Reconcile an unknown initial Save As only after the matching Character Animator process exits and the destination remains absent.
 
 ## Unreleased
+
+## 0.2.0 - 2026-11-04
 
 ### Added
 
