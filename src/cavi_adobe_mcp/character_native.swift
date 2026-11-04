@@ -124,6 +124,8 @@ final class Observation {
     var primaryCommandDispatched = false
     var phase = "request_validation"
     var lastState: [String: Any]?
+    var submissionMayHaveStarted = false
+    var continuationDiagnostics: [String: Any]?
     init(applicationPath: String) throws {
         applicationURL = URL(fileURLWithPath: applicationPath).standardizedFileURL.resolvingSymlinksInPath()
         guard applicationURL.pathExtension == "app", let bundle = Bundle(url: applicationURL),
@@ -922,17 +924,34 @@ final class Observation {
                     && bool($0.0, "AXSelected") == true
             }
         }
-        func settle(_ ready: (Observation) -> Bool) async throws -> Observation {
+        func isParentedGoToReady(_ current: Observation) -> Bool {
+            typedChooserIsFocused(current, kind: kind)
+                && current.focusedWindow.map {
+                    text($0, "AXIdentifier") == "GoToWindow" && text($0, "AXRole") == "AXSheet"
+                } == true
+        }
+        func settle(_ stage: String, ready: (Observation) -> Bool) async throws -> Observation {
             let deadline = ProcessInfo.processInfo.systemUptime + 5
             var previous: String?
+            var observations = 0
+            var lastReady = false
+            var fingerprintStable = false
             while ProcessInfo.processInfo.systemUptime < deadline {
                 try Task.checkCancellation()
                 let current = try observe()
                 try verify(current)
+                observations += 1
+                phase = "chooser_\(stage)_readiness"
                 let fingerprint = current.state["fingerprint"] as? String
-                if ready(current), let fingerprint, fingerprint == previous { return current }
-                previous = ready(current) ? fingerprint : nil
-                try await Task.sleep(nanoseconds: 100_000_000)
+                lastReady = ready(current)
+                fingerprintStable = fingerprint != nil && fingerprint == previous
+                continuationDiagnostics = ["stage": stage, "last_ready": lastReady,
+                                           "fingerprint_stable": fingerprintStable,
+                                           "observations": observations]
+                if lastReady && fingerprintStable { return current }
+                previous = fingerprint
+                let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(min(0.1, remaining) * 1_000_000_000)) }
             }
             try fail("CHOOSER_UNAVAILABLE", "The exact typed chooser did not reach the requested observed state")
         }
@@ -944,14 +963,14 @@ final class Observation {
                 guard opened["status"] as? String == "native_chooser_directory_requested" else {
                     try fail("CHOOSER_MISMATCH", "Chooser directory navigation did not reach its recorded stage")
                 }
-                current = try await settle { typedChooserIsFocused($0, kind: kind) }
+                current = try await settle("go_to_sheet") { isParentedGoToReady($0) }
             }
             if !isDirectoryReady(current) {
                 guard current.focusedWindow.map({ text($0, "AXIdentifier") }) == "GoToWindow" else {
                     try fail("CHOOSER_MISMATCH", "The exact typed chooser or its parented Go To sheet is required")
                 }
                 _ = try await continueDirectoryEntry(current, parameters: parameters)
-                current = try await settle(isDirectoryReady)
+                current = try await settle("target_directory") { isDirectoryReady($0) }
             }
         }
         guard isDirectoryReady(current) else {
@@ -1228,6 +1247,8 @@ final class Observation {
                 }
                 guard stillSelected else { try fail("INPUT_NOT_OBSERVED", "The retained import file selection changed before submission") }
                 try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import"))
+                phase = "import_dispatch"
+                submissionMayHaveStarted = true
                 try perform(readyButton)
                 return ["status": "native_chooser_submitted", "destination": selectedURL.path,
                         "completion": "unverified", "retry_safe": false]
@@ -1255,6 +1276,7 @@ final class Observation {
             }
             try verifyTopmostChooser(ready, window: try panel(ready, kind: kind))
             phase = "save_dispatch"
+            submissionMayHaveStarted = true
             try perform(saveButton)
             return ["status": "native_chooser_submitted", "destination": directoryURL.appendingPathComponent(basename).path,
                     "directory": directory, "filename": basename, "completion": "unverified", "retry_safe": false]
@@ -1540,12 +1562,19 @@ Task { @MainActor in
         let known = error as? NativeFailure
         let unknown = commandPaths[operation] != nil || operation == "project_select"
             ? adapter?.primaryCommandDispatched == true : adapter?.dispatched == true
+        var errorEnvelope: [String: Any] = ["code": unknown ? "OUTCOME_UNKNOWN" : known?.code ?? "NATIVE_INSPECTION_FAILED",
+            "native_code": known?.code ?? "NATIVE_INSPECTION_FAILED",
+            "phase": adapter?.phase ?? "request_validation",
+            "message": "[" + (adapter?.phase ?? "request_validation") + "] " + (known?.message ?? String(describing: error)),
+            "outcome": unknown ? "unknown" : "rejected", "retry_safe": false]
+        if operation == "continue_chooser" {
+            errorEnvelope["submission_may_have_started"] = adapter?.submissionMayHaveStarted ?? false
+            if let diagnostics = adapter?.continuationDiagnostics {
+                errorEnvelope["continuation_diagnostics"] = diagnostics
+            }
+        }
         var envelope: [String: Any] = ["version": 1, "ok": false, "operation": operation,
-            "error": ["code": unknown ? "OUTCOME_UNKNOWN" : known?.code ?? "NATIVE_INSPECTION_FAILED",
-                      "native_code": known?.code ?? "NATIVE_INSPECTION_FAILED",
-                      "phase": adapter?.phase ?? "request_validation",
-                      "message": "[" + (adapter?.phase ?? "request_validation") + "] " + (known?.message ?? String(describing: error)),
-                      "outcome": unknown ? "unknown" : "rejected", "retry_safe": false] as [String: Any]]
+                                       "error": errorEnvelope]
         if let state = adapter?.lastState { envelope["state"] = state }
         if let data = try? canonical(envelope) { FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10])) }
     }

@@ -38,6 +38,7 @@ class NativeFixture:
         self.import_directory_pending = False
         self.fail_import_before_envelope = False
         self.fail_continue_import_unknown = False
+        self.continue_chooser_error_context = None
         self.fail_import_focus_dispatch = False
         self.fail_import_generic_no_menu = False
         self.fail_export_submit = False
@@ -170,10 +171,23 @@ class NativeFixture:
             self.last_continue_chooser_parameters = copy.deepcopy(parameters or {})
             kind = (parameters or {}).get("kind")
             if kind == "export_png_wav" and self.fail_export_destination:
-                raise CharacterRejected("Fixture pre-dispatch export state changed", "STALE_STATE")
+                error = CharacterRejected("Fixture pre-dispatch export state changed", "STALE_STATE")
+                error.native_context = {"phase": "chooser_continue_preflight",
+                                        "submission_may_have_started": False}
+                raise error
             if ((kind == "export_png_wav" and self.fail_export_submit)
                     or (kind == "import" and self.fail_continue_import_unknown)):
-                raise CharacterUnknown("Fixture atomic import continuation timed out")
+                if (self.continue_chooser_error_context or {}).get("phase") == "go_to_sheet_readiness":
+                    panel_id, title = (("open-panel", "Import") if kind == "import"
+                                       else ("save-panel", "Export Scene"))
+                    self.state.update(frontmost=True, fingerprint="fixture-go-to-sheet",
+                                      focused_window={"identifier": "GoToWindow", "role": "AXSheet"},
+                                      windows=[{"identifier": panel_id, "title": title, "modal": True},
+                                               {"identifier": "GoToWindow", "role": "AXSheet"}])
+                error = CharacterUnknown("Fixture atomic chooser continuation timed out")
+                if self.continue_chooser_error_context is not None:
+                    error.native_context = copy.deepcopy(self.continue_chooser_error_context)
+                raise error
             if kind == "import" and self.import_directory_pending:
                 return {"version": 1, "ok": True, "operation": operation,
                         "state": copy.deepcopy(self.state),
@@ -937,6 +951,51 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls)
         self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], operation_id)
 
+    def test_continue_export_resumes_only_with_recorded_pre_submit_context(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/exports").mkdir()
+        self.native.state["fingerprint"] = "a" * 64
+        fingerprint = self.client.inspect()["native"]["state"]["fingerprint"]
+        self.native.fail_export_submit = True
+        self.native.continue_chooser_error_context = {
+            "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+            "continuation_diagnostics": {"stage": "go_to_sheet", "last_ready": True,
+                                         "fingerprint_stable": False, "observations": 4},
+        }
+        with self.assertRaises(CharacterUnknown):
+            self.client.scene_export("exports/talk", "SignalTalk", fingerprint, lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.assertEqual(packet["native_continuation"]["submission_may_have_started"], False)
+        self.assertEqual(packet["native_continuation"]["phase"], "go_to_sheet_readiness")
+        self.assertEqual(self.native.state["focused_window"]["identifier"], "GoToWindow")
+
+        self.native.fail_export_submit = False
+        result = self.client.operation_control("continue_export", packet["operation_id"], lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_export_submitted")
+        self.assertEqual(self.native.calls.count("continue_chooser"), 2)
+
+    def test_continue_export_blocks_true_submission_context(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/exports").mkdir()
+        self.native.state["fingerprint"] = "b" * 64
+        fingerprint = self.client.inspect()["native"]["state"]["fingerprint"]
+        self.native.fail_export_submit = True
+        self.native.continue_chooser_error_context = {
+            "phase": "save_dispatch", "submission_may_have_started": True,
+        }
+        with self.assertRaises(CharacterUnknown):
+            self.client.scene_export("exports/talk", "SignalTalk", fingerprint, lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        calls = self.native.calls.count("continue_chooser")
+        self.native.fail_export_submit = False
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_export", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(self.native.calls.count("continue_chooser"), calls)
+        self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], packet["operation_id"])
+
     def test_continue_export_rejects_changed_process_or_source_before_dispatch(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
@@ -1159,15 +1218,64 @@ class CharacterOwnershipTests(unittest.TestCase):
             self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
         self.assertEqual(self.native.calls.count("continue_chooser"), calls_before + 1)
 
+    def test_continue_import_resumes_same_operation_with_recorded_pre_submit_context(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_continue_import_unknown = True
+        self.native.continue_chooser_error_context = {
+            "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+            "continuation_diagnostics": {"stage": "go_to_sheet", "last_ready": True,
+                                         "fingerprint_stable": False, "observations": 5},
+        }
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        self.assertEqual(pending["native_continuation"]["submission_may_have_started"], False)
+        self.assertEqual(self.native.state["focused_window"]["identifier"], "GoToWindow")
+        operation_id = pending["operation_id"]
+        import_calls = self.native.calls.count("import")
+
+        self.native.fail_continue_import_unknown = False
+        result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(result["operation_id"], operation_id)
+        self.assertEqual(self.native.calls.count("import"), import_calls)
+        self.assertEqual(self.native.calls.count("continue_chooser"), 2)
+
+    def test_continue_import_blocks_true_submission_context(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_continue_import_unknown = True
+        self.native.continue_chooser_error_context = {
+            "phase": "import_dispatch", "submission_may_have_started": True,
+        }
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        calls = self.native.calls.count("continue_chooser")
+        self.native.fail_continue_import_unknown = False
+
+        with self.assertRaisesRegex(CharacterRejected, "already dispatched"):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.native.calls.count("continue_chooser"), calls)
+
     def test_continue_import_rejects_changed_process_before_native_dispatch(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
-        self.native.fail_import_before_envelope = True
+        self.native.fail_continue_import_unknown = True
+        self.native.continue_chooser_error_context = {
+            "phase": "go_to_sheet_readiness", "submission_may_have_started": False,
+        }
         with self.assertRaises(CharacterUnknown):
             self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
         pending = self.client.inspect()["pending_operation"]
-        self.native.fail_import_before_envelope = False
+        self.assertIs(pending["native_continuation"]["submission_may_have_started"], False)
+        self.native.fail_continue_import_unknown = False
         self.native.state.update(pid=43, launch_time="replacement-process")
         calls_before = self.native.calls.count("continue_chooser")
 

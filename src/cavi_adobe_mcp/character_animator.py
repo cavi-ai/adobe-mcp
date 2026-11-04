@@ -33,6 +33,15 @@ def project_identity(state):
                         ("bundle_id", "pid", "launch_time", "project_roots")})
 
 
+def _may_resume_atomic_continuation(packet):
+    if packet.get("atomic_continuation_attempted") is not True:
+        return True
+    context = packet.get("native_continuation")
+    return (isinstance(context, dict)
+            and context.get("submission_may_have_started") is False
+            and isinstance(context.get("phase"), str) and bool(context["phase"]))
+
+
 class CharacterAnimator:
     def __init__(self, workspace, directory, bridge=None):
         self.workspace = Path(workspace).resolve(strict=True)
@@ -691,6 +700,7 @@ class CharacterAnimator:
                         nonlocal native, dispatched
                         if command == "continue_chooser":
                             current = native
+                            packet.pop("native_continuation", None)
                             packet.update(atomic_continuation_attempted=True)
                             write_json(journal, packet)
                             native = self.bridge.call(command, arguments, expected=current["state"],
@@ -750,11 +760,11 @@ class CharacterAnimator:
                 if isinstance(exc, CharacterRejected) and dispatched == 0:
                     journal.unlink()
                     raise
-                if isinstance(exc, CharacterRejected) and getattr(exc, "error_code", "") != "OUTCOME_UNKNOWN":
-                    packet.pop("atomic_continuation_attempted", None)
                 packet["state"] = "unknown"
                 packet["failure"] = {"code": getattr(exc, "error_code", "OUTCOME_UNKNOWN"),
                                      "message": str(exc)[:4000]}
+                if packet.get("atomic_continuation_attempted") is True:
+                    packet["native_continuation"] = getattr(exc, "native_context", None) or {}
                 write_json(journal, packet)
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
@@ -1169,7 +1179,7 @@ class CharacterAnimator:
                         or (last_command is not None and recorded_native.get("operation") != last_command)
                         or not isinstance(recorded_result, dict)):
                     raise CharacterRejected("Export continuation has no recorded chooser stage to resume")
-                if packet.get("atomic_continuation_attempted") is True:
+                if not _may_resume_atomic_continuation(packet):
                     raise CharacterRejected("The native export continuation was already dispatched; inspect its outcome")
                 if (last_command == "chooser_destination"
                         and recorded_result.get("status") == "native_chooser_directory_requested"):
@@ -1207,6 +1217,7 @@ class CharacterAnimator:
                              "output_directory_identity": identity}
 
                 try:
+                    packet.pop("native_continuation", None)
                     packet.update(state="unknown", atomic_continuation_attempted=True)
                     write_json(self.directory / "operation.json", packet)
                     selected = self.bridge.call("continue_chooser", arguments,
@@ -1237,11 +1248,10 @@ class CharacterAnimator:
                 except BaseException as exc:
                     if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                         raise
-                    if isinstance(exc, CharacterRejected) and getattr(exc, "error_code", "") != "OUTCOME_UNKNOWN":
-                        packet.pop("atomic_continuation_attempted", None)
                     packet.update(state="unknown", last_failure={
                         "code": getattr(exc, "error_code", "OUTCOME_UNKNOWN"),
                         "message": str(exc)[:4000]})
+                    packet["native_continuation"] = getattr(exc, "native_context", None) or {}
                     write_json(self.directory / "operation.json", packet)
                     if isinstance(exc, (CharacterRejected, CharacterUnknown)):
                         raise
@@ -1291,7 +1301,7 @@ class CharacterAnimator:
                         or lease.get("owned_root") != source_root
                         or state.get("authentication_or_permission_prompt") is True):
                     raise CharacterRejected("Continue requires the same owned project and process without a prompt")
-                if action == "continue_import" and packet.get("atomic_continuation_attempted") is True:
+                if action == "continue_import" and not _may_resume_atomic_continuation(packet):
                     raise CharacterRejected("The native import continuation was already dispatched; inspect its outcome")
                 focus = state.get("focused_window") or {}
                 if action == "confirm_cancelled_import":
@@ -1375,6 +1385,7 @@ class CharacterAnimator:
                              "expected_sha256": intent["import_copy_sha256"]}
 
                 try:
+                    packet.pop("native_continuation", None)
                     packet.update(state="unknown", atomic_continuation_attempted=True)
                     write_json(self.directory / "operation.json", packet)
                     after = self.bridge.call("continue_chooser", arguments,
@@ -1406,11 +1417,10 @@ class CharacterAnimator:
                 except BaseException as exc:
                     if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                         raise
-                    if isinstance(exc, CharacterRejected) and getattr(exc, "error_code", "") != "OUTCOME_UNKNOWN":
-                        packet.pop("atomic_continuation_attempted", None)
                     packet.update(state="unknown", last_failure={
                         "code": getattr(exc, "error_code", "OUTCOME_UNKNOWN"),
                         "message": str(exc)[:4000]})
+                    packet["native_continuation"] = getattr(exc, "native_context", None) or {}
                     write_json(self.directory / "operation.json", packet)
                     if isinstance(exc, (CharacterRejected, CharacterUnknown)):
                         raise
