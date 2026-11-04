@@ -137,7 +137,18 @@ class NativeBridge:
 
                 compare(expected, result["state"])
                 message += "; changed native state: " + ("; ".join(differences) or "fingerprint only")
-            raise exception(message, code)
+            failure = exception(message, code)
+            if operation == "continue_chooser":
+                diagnostics = error.get("continuation_diagnostics")
+                failure.native_context = {
+                    "phase": error.get("phase") if isinstance(error.get("phase"), str) else None,
+                    "submission_may_have_started": (
+                        error.get("submission_may_have_started")
+                        if type(error.get("submission_may_have_started")) is bool else None
+                    ),
+                    "continuation_diagnostics": diagnostics if isinstance(diagnostics, dict) else None,
+                }
+            raise failure
         if not isinstance(result.get("state"), dict) or not isinstance(result.get("result"), dict):
             raise CharacterUnknown("Native response lacks observed state")
         result["transport"] = {"source_sha256": binary.parent.name,
