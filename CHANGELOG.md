@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-11-04
+
 ### Added
 
 - Photoshop can resample an owned document to exact pixel dimensions while retaining editable layers and paths.
