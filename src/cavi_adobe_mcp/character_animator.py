@@ -103,12 +103,22 @@ class CharacterAnimator:
                 original_observation = packet.get("native") or packet.get("before_native")
                 original_state = original_observation.get("state") if isinstance(original_observation, dict) else None
                 owned_root = lease.get("owned_root")
-                if (not isinstance(original_state, dict) or not isinstance(owned_root, str)
-                        or packet.get("parameters", {}).get("project_root") != owned_root
-                        or observed["native"]["state"].get("project_roots") != [owned_root]
-                        or observed["native"]["state"].get("authentication_or_permission_prompt") is True
-                        or (observed["native"]["state"].get("pid"),
-                            observed["native"]["state"].get("launch_time"))
+                if "owned_root" not in lease:
+                    raise CharacterRejected("Resume requires the original lease ownership state")
+                if owned_root is None:
+                    source, _, _ = self._initial_copy_paths(packet)
+                    expected_root = str(source)
+                else:
+                    expected_root = owned_root
+                state = observed["native"]["state"]
+                if (not isinstance(original_state, dict) or not isinstance(expected_root, str)
+                        or packet.get("parameters", {}).get("project_root") != expected_root
+                        or state.get("project_roots") != [expected_root]
+                        or (owned_root is None and
+                            (original_state.get("project_roots") != [expected_root]
+                             or project_identity(original_state) != packet.get("before_project_id")))
+                        or state.get("authentication_or_permission_prompt") is True
+                        or (state.get("pid"), state.get("launch_time"))
                         != (original_state.get("pid"), original_state.get("launch_time"))):
                     raise CharacterRejected("Resume requires the same recorded process and sole owned project root")
                 lease = {**lease, "lease_id": uuid.uuid4().hex,
@@ -144,6 +154,28 @@ class CharacterAnimator:
         if new and path.exists():
             raise CharacterRejected("Output must not already exist")
         return path
+
+    def _initial_copy_paths(self, packet):
+        parameters = packet.get("parameters")
+        intent = packet.get("intent")
+        source_root = parameters.get("project_root") if isinstance(parameters, dict) else None
+        if (packet.get("operation") != "save_as"
+                or packet.get("initial_native_operation") != "save_as"
+                or not isinstance(intent, dict)):
+            raise CharacterRejected("This operation is not a recorded initial Save As copy")
+        name = intent.get("name")
+        if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
+            raise CharacterRejected("Initial Save As requires its recorded copy name")
+        source = self.path(source_root)
+        directory = self.path(intent.get("directory"))
+        destination = self.path(intent.get("destination"), new=True)
+        expected_destination = self.path(str(directory / name), new=True)
+        if (str(source) != source_root or not source.is_dir()
+                or str(directory) != intent.get("directory") or not directory.is_dir()
+                or str(destination) != intent.get("destination")
+                or destination != expected_destination or destination == source):
+            raise CharacterRejected("Initial Save As requires the exact new workspace copy destination")
+        return source, directory, destination
 
     def mutate(self, operation, parameters, lease_id, *, owned=True, cancelled=None,
                continuation=None, intent=None, expected_fingerprint=None,
@@ -552,7 +584,8 @@ class CharacterAnimator:
     def operation_control(self, action, operation_id, lease_id=None, cancelled=None,
                           user_confirmed_cancelled=False):
         if action not in ("inspect", "verify_copy", "continue_copy", "continue_import", "continue_export",
-                          "confirm_cancelled_import", "cancel_unsubmitted") or not IDENTIFIER.fullmatch(operation_id):
+                          "confirm_cancelled_import", "cancel_unsubmitted",
+                          "reconcile_unsubmitted_copy") or not IDENTIFIER.fullmatch(operation_id):
             raise CharacterRejected("Use a known operation ID and a supported operation control action")
         if action == "confirm_cancelled_import" and type(user_confirmed_cancelled) is not bool:
             raise CharacterRejected("user_confirmed_cancelled must be a strict boolean")
@@ -581,6 +614,78 @@ class CharacterAnimator:
             state = observed["state"]
             if (state.get("pid"), state.get("launch_time")) != (original.get("pid"), original.get("launch_time")):
                 raise CharacterRejected("The native application process changed; outcome remains unresolved")
+            if action == "reconcile_unsubmitted_copy":
+                source, _, destination = self._initial_copy_paths(packet)
+                source_root = str(source)
+                recorded_native = packet.get("native")
+                recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
+                recorded_state = recorded_native.get("state") if isinstance(recorded_native, dict) else None
+                before_observation = packet.get("before_native")
+                before_state = before_observation.get("state") if isinstance(before_observation, dict) else None
+
+                def has_modal_or_chooser(native_state):
+                    focus = native_state.get("focused_window") or {}
+                    chooser_ids = {"save-panel", "GoToWindow", "open-panel"}
+                    chooser_titles = {"Save Project As", "Export Scene", "Import"}
+                    windows = native_state.get("windows", [])
+                    return (native_state.get("authentication_or_permission_prompt") is True
+                            or focus.get("modal") is True or focus.get("role") == "AXSheet"
+                            or focus.get("identifier") in chooser_ids
+                            or focus.get("title") in chooser_titles
+                            or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                   or window.get("identifier") in chooser_ids
+                                   or window.get("title") in chooser_titles
+                                   for window in windows if isinstance(window, dict)))
+
+                if (lease.get("owned_root") is not None
+                        or lease.get("project_id") != packet.get("before_project_id")
+                        or packet.get("last_command") != "chooser_destination"
+                        or not isinstance(recorded_native, dict)
+                        or recorded_native.get("operation") != "chooser_destination"
+                        or not isinstance(recorded_result, dict)
+                        or recorded_result.get("status") != "native_chooser_directory_requested"
+                        or not isinstance(original, dict)
+                        or not isinstance(original.get("pid"), int)
+                        or original.get("launch_time") is None
+                        or not isinstance(recorded_state, dict)
+                        or recorded_state.get("project_roots") != [source_root]
+                        or project_identity(recorded_state) != packet.get("before_project_id")
+                        or not isinstance(before_state, dict)
+                        or before_state.get("project_roots") != [source_root]
+                        or project_identity(before_state) != packet.get("before_project_id")
+                        or project_identity(state) != packet.get("before_project_id")
+                        or state.get("project_roots") != [source_root]
+                        or has_modal_or_chooser(state)):
+                    raise CharacterRejected("Reconcile requires the recorded pre-submit Save As stage and the same unobstructed source project")
+                first_fingerprint = state.get("fingerprint")
+                fresh = self.bridge.call("inspect", cancelled=cancelled)
+                fresh_state = fresh.get("state", {})
+                if (not isinstance(first_fingerprint, str) or not first_fingerprint
+                        or fresh_state.get("fingerprint") != first_fingerprint
+                        or project_identity(fresh_state) != packet.get("before_project_id")
+                        or fresh_state.get("project_roots") != [source_root]
+                        or (fresh_state.get("pid"), fresh_state.get("launch_time"))
+                        != (original.get("pid"), original.get("launch_time"))
+                        or has_modal_or_chooser(fresh_state) or destination.exists()):
+                    raise CharacterRejected("Reconcile requires a stable no-chooser observation and absent copy destination")
+                result = {"status": "unsubmitted_copy_reconciled",
+                          "completion": "recorded_pre_submit_stage_closed_without_submission",
+                          "expected_output_exists": False, "native": fresh}
+                packet.update(state="resolved", resolution="reconcile_unsubmitted_copy",
+                              reconciliation_basis="recorded_pre_submit_directory_request",
+                              reconciliation_native=fresh, result=result)
+                receipts = self.directory / "operations"
+                receipts.mkdir(exist_ok=True, mode=0o700)
+                receipt = receipts / (operation_id + ".json")
+                if receipt.exists():
+                    raise CharacterRejected("A reconciliation receipt already exists for this operation")
+                try:
+                    write_json(receipt, packet)
+                    write_json(self.directory / "lease.json", lease)
+                    (self.directory / "operation.json").unlink()
+                except OSError as exc:
+                    raise CharacterUnknown("Unsubmitted stage was observed but its reconciliation journal was not committed") from exc
+                return {**result, "operation_id": operation_id, "retry_safe": False}
             if action == "continue_export":
                 intent = packet.get("intent", {})
                 target = self.path(intent.get("directory"))

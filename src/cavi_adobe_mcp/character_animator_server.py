@@ -261,7 +261,8 @@ async def project_select(name: str, item_type: Literal["puppet", "audio", "scene
 
 @mcp.tool(annotations=WRITE)
 async def operation_control(action: Literal["inspect", "verify_copy", "continue_copy", "continue_import", "continue_export",
-                                            "confirm_cancelled_import", "cancel_unsubmitted"],
+                                            "confirm_cancelled_import", "cancel_unsubmitted",
+                                            "reconcile_unsubmitted_copy"],
                             operation_id: str, lease_id: str | None = None,
                             user_confirmed_cancelled: StrictBool = False) -> CharacterOperation:
     """Inspect or continue exact pending copy/import/export operations, verify a copy, or reconcile cancellation.
@@ -271,6 +272,8 @@ async def operation_control(action: Literal["inspect", "verify_copy", "continue_
     recorded pre-menu focus rejection. confirm_cancelled_import requires explicit user attestation and
     matching process/root/source evidence; it issues no native command and is not native-verified cancellation.
     cancel_unsubmitted applies only to an observed unsubmitted Save As chooser.
+    reconcile_unsubmitted_copy records only a closed, pre-submit initial Save As stage after stable source checks;
+    it sends no native command and does not imply user cancellation.
     """
     return await execute(lambda cancelled: client().operation_control(
         action, operation_id, lease_id, cancelled, user_confirmed_cancelled))

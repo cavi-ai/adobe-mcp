@@ -173,6 +173,23 @@ class CharacterOwnershipTests(unittest.TestCase):
         packet = self.client.inspect()["pending_operation"]
         return lease, packet
 
+    def pending_closed_initial_save_as(self):
+        source = self.root / "workspace/SignalSparkHomeport"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        packet["last_command"] = "chooser_destination"
+        packet["native"]["operation"] = "chooser_destination"
+        packet["native"]["result"]["status"] = "native_chooser_directory_requested"
+        write_json(self.client.directory / "operation.json", packet)
+        self.native.state["focused_window"] = {"identifier": "main-window",
+                                                 "role": "AXLayoutArea",
+                                                 "title": "Character Animator"}
+        self.native.state["windows"] = [{"identifier": "main-window", "role": "AXWindow",
+                                          "title": "Character Animator", "modal": False}]
+        self.native.state["fingerprint"] = "closed-save-as"
+        return lease, packet
+
     def pending_unknown_import(self):
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
@@ -673,6 +690,128 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertGreater(renewed["expires_at"], time.time())
         self.assertEqual(self.client.read("operation.json"), original_packet)
 
+    def test_resume_renews_expired_lease_for_exact_initial_save_as_without_dispatch(self):
+        source = self.root / "workspace/SignalSparkHomeport"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        original_packet = copy.deepcopy(packet)
+        lease_path = self.client.directory / "lease.json"
+        old_lease = self.client.read("lease.json")
+        self.assertIsNone(old_lease["owned_root"])
+        old_lease["expires_at"] = time.time() - 1
+        write_json(lease_path, old_lease)
+        native_calls = list(self.native.calls)
+
+        resumed = self.client.session("resume", lease["owner"], packet["before_project_id"],
+                                      lease["lease_id"], 300,
+                                      pending_operation_id=packet["operation_id"])
+
+        self.assertEqual(resumed["state"], "owned")
+        self.assertNotEqual(resumed["lease_id"], lease["lease_id"])
+        self.assertEqual(resumed["pending_operation"], original_packet)
+        self.assertEqual(self.native.calls.count("save_as"), native_calls.count("save_as"))
+        renewed = self.client.read("lease.json")
+        self.assertEqual(renewed["owned_root"], None)
+        self.assertEqual(renewed["lease_id"], resumed["lease_id"])
+        self.assertEqual(self.client.read("operation.json"), original_packet)
+
+    def test_resume_rejects_mismatched_initial_save_as_intent_or_source(self):
+        source = self.root / "workspace/SignalSparkHomeport"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        lease_path = self.client.directory / "lease.json"
+        old_lease = self.client.read("lease.json")
+        old_lease["expires_at"] = time.time() - 1
+        write_json(lease_path, old_lease)
+        original_native_state = copy.deepcopy(self.native.state)
+        original_calls = self.native.calls.count("save_as")
+
+        cases = (
+            ("wrong operation", lambda damaged: damaged.update(operation="import"), None),
+            ("wrong destination", lambda damaged: damaged["intent"].update(
+                destination=str(self.root / "workspace/copies/Other")), None),
+            ("wrong source root", lambda damaged: damaged["parameters"].update(
+                project_root=str(self.root / "workspace/other")), None),
+            ("replaced process", lambda damaged: None, "pid"),
+        )
+        for label, damage_packet, damage_native in cases:
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(packet)
+                damage_packet(damaged)
+                write_json(self.client.directory / "operation.json", damaged)
+                self.native.state = copy.deepcopy(original_native_state)
+                if damage_native == "pid":
+                    self.native.state["pid"] += 1
+                with self.assertRaises(CharacterRejected):
+                    self.client.session("resume", lease["owner"], packet["before_project_id"],
+                                        lease["lease_id"], 300,
+                                        pending_operation_id=packet["operation_id"])
+                self.assertEqual(self.client.read("lease.json"), old_lease)
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                self.assertEqual(self.native.calls.count("save_as"), original_calls)
+
+    def test_reconcile_closed_initial_save_as_preserves_unsubmitted_receipt_without_cancellation(self):
+        lease, packet = self.pending_closed_initial_save_as()
+        native_calls = list(self.native.calls)
+
+        result = self.client.operation_control("reconcile_unsubmitted_copy", packet["operation_id"],
+                                               lease["lease_id"])
+
+        self.assertEqual(result["status"], "unsubmitted_copy_reconciled")
+        self.assertEqual(result["completion"], "recorded_pre_submit_stage_closed_without_submission")
+        self.assertFalse(result["expected_output_exists"])
+        self.assertEqual(self.native.calls, native_calls + ["inspect", "inspect"])
+        self.assertIsNone(self.client.inspect()["pending_operation"])
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["state"], "resolved")
+        self.assertEqual(archived["resolution"], "reconcile_unsubmitted_copy")
+        self.assertEqual(archived["reconciliation_basis"], "recorded_pre_submit_directory_request")
+        self.assertEqual(archived["native"]["result"]["status"], "native_chooser_directory_requested")
+        self.assertNotIn("cancelled", result["status"])
+        self.assertIsNone(self.client.read("lease.json")["owned_root"])
+        self.assertNotIn("chooser_cancel", self.native.calls[len(native_calls):])
+
+    def test_reconcile_closed_initial_save_as_rejects_submitted_or_changed_state(self):
+        lease, packet = self.pending_closed_initial_save_as()
+        original_lease = self.client.read("lease.json")
+        original_native = copy.deepcopy(self.native.state)
+        original_packet = copy.deepcopy(packet)
+        destination = Path(packet["intent"]["destination"])
+        cases = (
+            ("submitted", lambda damaged, state: damaged["native"]["result"].update(
+                status="native_chooser_submitted"), False),
+            ("later dispatch", lambda damaged, state: damaged.update(
+                last_command="chooser_continue_directory"), False),
+            ("destination exists", lambda damaged, state: None, True),
+            ("changed process", lambda damaged, state: state.update(pid=state["pid"] + 1), False),
+            ("changed project", lambda damaged, state: state.update(
+                project_roots=[str(self.root / "workspace/other")]), False),
+            ("chooser visible", lambda damaged, state: state.update(
+                focused_window={"identifier": "GoToWindow", "role": "AXSheet"}), False),
+            ("modal visible", lambda damaged, state: state.update(
+                windows=[{"identifier": "permission-prompt", "modal": True}]), False),
+            ("permission prompt", lambda damaged, state: state.update(
+                authentication_or_permission_prompt=True), False),
+        )
+        for label, damage, create_destination in cases:
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(original_packet)
+                state = copy.deepcopy(original_native)
+                damage(damaged, state)
+                write_json(self.client.directory / "operation.json", damaged)
+                self.native.state = state
+                if create_destination:
+                    destination.mkdir()
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("reconcile_unsubmitted_copy", packet["operation_id"],
+                                                  lease["lease_id"])
+                self.assertEqual(self.client.read("lease.json"), original_lease)
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                if create_destination:
+                    destination.rmdir()
+
     def test_resume_rejects_active_wrong_owner_operation_or_project_without_changes(self):
         lease, packet = self.pending_unknown_import()
         lease_path = self.client.directory / "lease.json"
@@ -765,6 +904,8 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("pending_operation_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
+                self.assertIn("reconcile_unsubmitted_copy",
+                              tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("import_media", tools)
                 self.assertIn("scene_action", tools)
                 self.assertIn("scene_export", tools)
