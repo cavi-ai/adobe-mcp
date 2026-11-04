@@ -80,6 +80,9 @@ server's `operation_control` tool, before trying again.
 
 When a pending Character Animator chooser is behind the app, the server activates the
 app and rechecks the recorded process, project, and exact chooser before continuing.
+For an unknown initial Save As whose app process has exited,
+`operation_control(action="reconcile_copy_after_exit")` can record that the destination
+is absent and no copy was verified; it does not report a successful save or a user cancellation.
 
 ## Development
 
