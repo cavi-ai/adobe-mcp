@@ -42,6 +42,7 @@ class NativeFixture:
         self.fail_export_destination = False
         self.hide_chooser_after_command = False
         self.export_inspect_states = []
+        self.import_inspect_states = []
         self.open_without_root = False
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
@@ -54,6 +55,8 @@ class NativeFixture:
             raise CharacterRejected("Stale export chooser observation", "STALE_STATE")
         if operation == "inspect" and self.export_inspect_states:
             self.state.update(copy.deepcopy(self.export_inspect_states.pop(0)))
+        if operation == "inspect" and self.import_inspect_states:
+            self.state.update(copy.deepcopy(self.import_inspect_states.pop(0)))
         if operation == "focus":
             kind = (parameters or {}).get("kind")
             panel_id, title = (("open-panel", "Import") if kind == "import" else
@@ -85,11 +88,13 @@ class NativeFixture:
             self.state["windows"] = [{"modal": True, "identifier": "save-panel",
                                        "title": "Save Project As"}]
             if self.hide_chooser_after_command:
+                main_title = self.state.get("main_title", "Character Animator")
+                main_frame = [0, 39, 2056, 1290]
                 self.state.update(frontmost=False, fingerprint="background-main",
                                   focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                  "title": "Character Animator"},
-                                  windows=[{"identifier": "main-window", "role": "AXWindow",
-                                            "title": "Character Animator", "modal": False}])
+                                                  "title": main_title, "frame": main_frame},
+                                  windows=[{"identifier": "main-window", "role": "AXLayoutArea",
+                                            "title": main_title, "modal": False, "frame": main_frame}])
         if operation == "chooser_destination":
             self.state["fingerprint"] = "go-to"
             self.state["focused_window"] = {"identifier": "GoToWindow", "role": "AXSheet"}
@@ -520,6 +525,136 @@ class CharacterOwnershipTests(unittest.TestCase):
             self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
         return lease, self.client.inspect()["pending_operation"]
 
+    def pending_owned_unknown_import_after_exit(self):
+        self.native.state.update(
+            bundle_id="com.adobe.Character-Animator.application",
+            application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            pid=29112, launch_time=1793689177.654345, running=True, process_count=1,
+            authentication_or_permission_prompt=False)
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        lease = self.client.read("lease.json")
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.native.state.update(running=False, process_count=0, pid=None, launch_time=None,
+                                 bundle_process_count=0, fingerprint="character-app-stopped")
+        self.native.state.pop("project_roots", None)
+        return lease, packet
+
+    def test_abandon_unknown_owned_import_after_exit_preserves_project_and_input(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        root = Path(lease["owned_root"])
+        input_path = self.root / "workspace/voice.wav"
+        before_project = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+        before_input = input_path.read_bytes()
+        before_calls = list(self.native.calls)
+
+        result = self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                               lease["lease_id"])
+
+        self.assertEqual(result["status"], "unknown_operation_abandoned")
+        self.assertEqual(result["completion"], "native_outcome_unknown")
+        self.assertFalse(result["retry_safe"])
+        self.assertEqual(self.native.calls, before_calls + ["inspect", "inspect"])
+        self.assertIsNone(self.client.read("operation.json"))
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["state"], "resolved")
+        self.assertEqual(archived["resolution"], "abandon_after_exit")
+        self.assertEqual(archived["failure"], packet["failure"])
+        self.assertEqual(archived["result"]["completion"], "native_outcome_unknown")
+        self.assertEqual(self.client.read("lease.json")["lease_id"], lease["lease_id"])
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        self.assertEqual({p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()},
+                         before_project)
+        self.assertEqual(input_path.read_bytes(), before_input)
+        self.assertNotIn("import", self.native.calls[len(before_calls):])
+
+    def test_abandon_unknown_rejects_active_app_wrong_lease_or_changed_owned_root(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        original_lease = copy.deepcopy(self.client.read("lease.json"))
+        original_packet = copy.deepcopy(self.client.read("operation.json"))
+        cases = (
+            ("active instance", lambda: self.native.state.update(running=True, process_count=1,
+                                                                    pid=29112, launch_time=1793689177.654345),
+             lease["lease_id"]),
+            ("secondary instance", lambda: self.native.state.update(process_count=1), lease["lease_id"]),
+            ("alternate same-bundle application", lambda: self.native.state.update(
+                bundle_process_count=1), lease["lease_id"]),
+            ("wrong lease", lambda: None, "0" * 32),
+            ("missing owner binding", lambda: write_json(
+                self.client.directory / "lease.json",
+                {**original_lease, "owner": ""}), lease["lease_id"]),
+        )
+        for label, damage, requested_lease in cases:
+            with self.subTest(case=label):
+                write_json(self.client.directory / "operation.json", original_packet)
+                write_json(self.client.directory / "lease.json", original_lease)
+                self.native.state.update(running=False, process_count=0, pid=None, launch_time=None)
+                damage()
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                                  requested_lease)
+                self.assertEqual(self.client.read("operation.json"), original_packet)
+                self.assertNotEqual(self.client.read("lease.json").get("expires_at"), 0)
+
+        for label, mutation in (
+                ("wrong project", lambda damaged: damaged.update(before_project_id="foreign")),
+                ("wrong root", lambda damaged: damaged["parameters"].update(project_root="foreign")),
+                ("unsupported operation", lambda damaged: damaged.update(operation="project_select"))):
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(original_packet)
+                mutation(damaged)
+                write_json(self.client.directory / "operation.json", damaged)
+                write_json(self.client.directory / "lease.json", original_lease)
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                                  lease["lease_id"])
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                self.assertEqual(self.client.read("lease.json"), original_lease)
+
+        write_json(self.client.directory / "operation.json", original_packet)
+        write_json(self.client.directory / "lease.json", original_lease)
+        root = Path(original_lease["owned_root"])
+        root.rename(root.with_name("Owned-moved"))
+        with self.assertRaises(CharacterRejected):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+
+    def test_abandon_unknown_retries_partial_archive_and_unlink_failures(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        receipt = self.client.directory / "operations" / (packet["operation_id"] + ".json")
+        original_write = write_json
+
+        def fail_receipt(path, value):
+            if Path(path) == receipt:
+                raise OSError("fixture receipt write failure")
+            return original_write(path, value)
+
+        with (patch("cavi_adobe_mcp.character_animator.write_json", fail_receipt),
+              self.assertRaisesRegex(CharacterUnknown, "receipt was not committed")):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        self.assertEqual(self.client.read("operation.json"), packet)
+
+        original_unlink = Path.unlink
+        operation_path = self.client.directory / "operation.json"
+
+        def fail_unlink(path, *args, **kwargs):
+            if path == operation_path:
+                raise OSError("fixture operation unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with (patch.object(Path, "unlink", fail_unlink),
+              self.assertRaisesRegex(CharacterUnknown, "pending journal remains")):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["result"]["completion"], "native_outcome_unknown")
+        self.assertEqual(self.client.read("operation.json"), packet)
+        self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        self.assertIsNone(self.client.read("operation.json"))
+
     def test_copy_uses_fresh_observation_and_retains_source_identity_limits(self):
         lease = self.claim()
         result = self.client.save_copy("copies", "Owned", lease["lease_id"])
@@ -554,6 +689,7 @@ class CharacterOwnershipTests(unittest.TestCase):
 
     def test_copy_and_resume_activate_background_window_then_recheck_exact_chooser(self):
         self.native.hide_chooser_after_command = True
+        self.native.state["main_title"] = "Adobe Character Animator 2026"
         lease = self.claim()
         copied = self.client.save_copy("copies", "Owned", lease["lease_id"])
         self.assertEqual(copied["status"], "owned_copy")
@@ -563,10 +699,10 @@ class CharacterOwnershipTests(unittest.TestCase):
         lease, packet = self.pending_save_as()
         self.native.fail = False
         self.native.state.update(frontmost=False, fingerprint="background-resume",
-                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                 "title": "Character Animator"},
-                                 windows=[{"identifier": "main-window", "role": "AXWindow",
-                                           "title": "Character Animator", "modal": False}])
+                                 focused_window=None,
+                                 windows=[{"identifier": "main-window", "role": "AXLayoutArea",
+                                           "title": "Adobe Character Animator 2026", "modal": False,
+                                           "frame": [0, 39, 2056, 1290]}])
         result = self.client.operation_control("continue_copy", packet["operation_id"], lease["lease_id"])
         self.assertEqual(result["status"], "owned_copy")
         self.assertEqual(self.native.calls.count("focus"), 3)
@@ -662,15 +798,19 @@ class CharacterOwnershipTests(unittest.TestCase):
         source = self.root / "workspace/voice.wav"
         source.write_bytes(b"fixture WAV bytes")
         self.native.state["fingerprint"] = "existing-import"
-        self.native.state["focused_window"] = {"identifier": "open-panel", "title": "Import",
-                                                "modal": True}
-        self.native.state["windows"] = [{"identifier": "open-panel", "title": "Import",
-                                         "modal": True}]
+        self.native.state["frontmost"] = False
+        self.native.state["focused_window"] = None
+        self.native.state["windows"] = [
+            {"identifier": "open-panel", "title": "Import", "modal": True},
+            {"identifier": "main-window", "role": "AXLayoutArea", "title": "Adobe Character Animator 2026",
+             "modal": False, "frame": [0, 39, 2056, 1290]},
+        ]
         calls_before = list(self.native.calls)
 
         result = self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(self.native.calls[len(calls_before):].count("focus"), 1)
         self.assertEqual(self.native.calls[len(calls_before):].count("import"), 0)
         self.assertEqual(self.native.calls[len(calls_before):].count("chooser_destination"), 1)
         archived = self.client.read("operations/" + result["operation_id"] + ".json")
@@ -973,6 +1113,62 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.calls.count("import"), 1)
         self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_continue_import_waits_for_stable_exact_chooser_after_transient_focus(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        operation_id = packet["operation_id"]
+        self.native.fail_import_before_envelope = False
+        self.native.import_inspect_states = [
+            {"fingerprint": "import-panel", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+            {"fingerprint": "temporary-main", "frontmost": True,
+             "focused_window": {"identifier": "main-window", "role": "AXLayoutArea",
+                                "title": "Character Animator"}, "windows": []},
+            {"fingerprint": "import-ready", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+            {"fingerprint": "import-ready", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+        ]
+        import_calls = self.native.calls.count("import")
+
+        result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(self.native.calls.count("import"), import_calls)
+        self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_continue_import_rejects_unparented_go_to_modal_under_import_focus(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.native.fail_import_before_envelope = False
+        self.native.import_inspect_states = [{
+            "frontmost": True,
+            "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+            "windows": [{"identifier": "GoToWindow", "role": "AXSheet", "modal": True}],
+        }]
+        chooser_calls = self.native.calls.count("chooser_destination")
+
+        with self.assertRaisesRegex(CharacterRejected, "unrelated modal"):
+            self.client.operation_control("continue_import", packet["operation_id"], lease["lease_id"])
+
+        pending = self.client.inspect()["pending_operation"]
+        self.assertEqual(pending["operation_id"], packet["operation_id"])
+        self.assertEqual(pending["state"], "unknown")
+        self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls)
 
     def test_import_recovery_keeps_unknown_when_owned_root_changed(self):
         lease = self.claim()
@@ -1507,16 +1703,21 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                 for tool in tools.values():
                     self.assertTrue(tool.output_schema["required"], tool.name)
-                session_result = tools["session_control"].output_schema["properties"]["result"]["anyOf"]
-                self.assertEqual(len(session_result), 2)
+                self.assertIn("project_id", tools["session_control"].output_schema["properties"])
+                self.assertNotIn("result", tools["session_control"].output_schema["properties"])
                 self.assertIn("resume", tools["session_control"].input_schema["properties"]["action"]["enum"])
-                self.assertIn("open_prepared_copy",
-                              tools["session_control"].input_schema["properties"]["action"]["enum"])
+                self.assertNotIn("open_prepared_copy",
+                                 tools["session_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("pending_operation_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("prepared_copy_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("project_prepare_copy", tools)
                 self.assertIn("prepared_copy_id",
                               tools["project_prepare_copy"].output_schema["properties"])
+                self.assertIn("project_open_prepared_copy", tools)
+                self.assertIn("prepared_copy_id",
+                              tools["project_open_prepared_copy"].input_schema["properties"])
+                self.assertIn("prepared_copy_opened",
+                              tools["project_open_prepared_copy"].output_schema["properties"]["status"]["enum"])
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("reconcile_unsubmitted_copy",

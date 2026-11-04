@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 - 2026-11-04
+
+### Added
+
+- Abandon an unknown operation only after the owned Character Animator process and all same-bundle instances exit.
+
 ## 0.3.0 - 2026-11-04
 
 ### Added
@@ -24,6 +30,11 @@
 - Reconcile an unknown initial Save As only after the matching Character Animator process exits and the destination remains absent.
 
 ## Unreleased
+
+### Fixed
+
+- Keep Character Animator ownership responses stable while opening a prepared project copy.
+- Activate the exact owned background chooser before continuing its recorded operation.
 
 ## 0.2.0 - 2026-11-04
 

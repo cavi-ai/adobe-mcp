@@ -75,7 +75,7 @@ keep them private.
 
 For a closed Character Animator project, use `project_prepare_copy` to copy its saved
 `.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
-`prepared_copy_id` to `session_control(action="open_prepared_copy")`, inspect the actual
+`prepared_copy_id` to `project_open_prepared_copy`, inspect the actual
 opened project root, then use `session_control(action="claim", prepared_copy_id=...)` to
 establish ownership before editing. Open and claim operate on that exact prepared copy.
 
@@ -89,6 +89,9 @@ app and rechecks the recorded process, project, and exact chooser before continu
 For an unknown initial Save As whose app process has exited,
 `operation_control(action="reconcile_copy_after_exit")` can record that the destination
 is absent and no copy was verified; it does not report a successful save or a user cancellation.
+For an unknown operation on a first-hand owned project, `operation_control(action="abandon_after_exit")`
+archives the operation after two stable observations confirm that its original process and all Character Animator
+instances have exited. The operation remains recorded as unknown; project and media files are preserved.
 
 ## Development
 

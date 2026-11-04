@@ -70,7 +70,10 @@ class NativeBridge:
         request = {"version": 1, "operation": operation, "parameters": parameters or {},
                    "application": str(path)}
         if expected is not None:
-            request["expected"] = {key: expected[key] for key in ("pid", "launch_time", "fingerprint")}
+            expected_keys = ["pid", "launch_time", "fingerprint"]
+            if operation == "focus":
+                expected_keys.extend(("bundle_id", "application", "project_roots"))
+            request["expected"] = {key: expected[key] for key in expected_keys}
         binary = self.executable()
         if cancelled.is_set():
             raise CharacterRejected("Request cancelled before native dispatch")
