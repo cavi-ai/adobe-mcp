@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -71,9 +74,12 @@ class CharacterAnimator:
                 "pending_operation": pending, "launches_application": False}
 
     def session(self, action, owner=None, expected_project=None, lease_id=None,
-                ttl_seconds=600, cancelled=None, pending_operation_id=None):
-        if action not in ("inspect", "claim", "renew", "release", "resume"):
-            raise CharacterRejected("Choose inspect, claim, renew, release or resume")
+                ttl_seconds=600, cancelled=None, pending_operation_id=None,
+                prepared_copy_id=None):
+        if action not in ("inspect", "claim", "renew", "release", "resume", "open_prepared_copy"):
+            raise CharacterRejected("Choose inspect, claim, renew, release, resume or open_prepared_copy")
+        if prepared_copy_id is not None and action not in ("claim", "open_prepared_copy"):
+            raise CharacterRejected("Prepared copy IDs are accepted only for claim or open_prepared_copy")
         if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= 3600:
             raise CharacterRejected("Lease lifetime must be 30..3600 seconds")
         with self.locked(cancelled):
@@ -81,16 +87,39 @@ class CharacterAnimator:
             identity = observed["project_id"]
             lease = self.read("lease.json")
             active = lease is not None and lease["expires_at"] > time.time()
+            if action == "open_prepared_copy":
+                return self._open_prepared_copy(prepared_copy_id, observed, lease, active, cancelled)
             if action == "claim":
                 if not isinstance(observed["native"]["state"].get("pid"), int):
-                    raise CharacterRejected("Start Character Animator and inspect its native state first")
+                    raise CharacterRejected("Open the prepared Character Animator project and inspect its native state first")
                 if (not isinstance(owner, str) or not 1 <= len(owner) <= 128
                         or any(ord(c) < 32 for c in owner) or expected_project != identity):
                     raise CharacterRejected("Claim requires an owner and the current observed project_id")
-                if active or observed["pending_operation"]:
-                    raise CharacterRejected("An active lease or unresolved operation already owns this application")
+                if active:
+                    raise CharacterRejected("An active lease already owns this application")
+                pending = observed["pending_operation"]
+                if pending:
+                    if (prepared_copy_id is None or pending.get("operation") != "open_prepared_copy"
+                            or pending.get("state") not in ("pending", "unknown")
+                            or pending.get("intent", {}).get("prepared_copy_id") != prepared_copy_id):
+                        raise CharacterRejected("An unresolved operation already owns this application")
+                    prepared = self._prepared_copy(prepared_copy_id)
+                    self._resolve_prepared_open(pending, prepared, observed, cancelled)
+                    observed = self.inspect(cancelled)
+                    identity = observed["project_id"]
+                    if observed["pending_operation"] is not None:
+                        raise CharacterUnknown("Prepared-copy open receipt remains unresolved")
+                elif prepared_copy_id is not None:
+                    prepared = self._prepared_copy(prepared_copy_id)
+                    self._verify_prepared_native_root(prepared, observed["native"]["state"])
+                else:
+                    prepared = None
                 lease = {"lease_id": uuid.uuid4().hex, "owner": owner, "project_id": identity,
                          "expires_at": time.time() + ttl_seconds, "owned_root": None}
+                if prepared is not None:
+                    lease.update(owned_root=prepared["destination"],
+                                 owned_root_identity=prepared["destination_identity"],
+                                 prepared_copy_id=prepared["prepared_copy_id"])
                 write_json(self.directory / "lease.json", lease)
             elif action == "resume":
                 packet = observed["pending_operation"]
@@ -140,6 +169,9 @@ class CharacterAnimator:
                       "expires_at": lease["expires_at"] if lease else None,
                       "state": "owned" if lease and lease["expires_at"] > time.time() else "unclaimed",
                       "pending_operation": observed["pending_operation"]}
+            if lease and lease.get("prepared_copy_id"):
+                result["prepared_copy_id"] = lease["prepared_copy_id"]
+                result["owned_root"] = lease["owned_root"]
             if action in ("claim", "renew", "resume"):
                 result["lease_id"] = lease["lease_id"]
             return result
@@ -155,6 +187,317 @@ class CharacterAnimator:
         if new and path.exists():
             raise CharacterRejected("Output must not already exist")
         return path
+
+    @staticmethod
+    def _directory_identity(path):
+        stat = path.stat()
+        return {"device": stat.st_dev, "inode": stat.st_ino}
+
+    @staticmethod
+    def _publish_directory_exclusive(source, destination):
+        if sys.platform != "darwin":
+            raise CharacterRejected("Exclusive project publication requires a macOS filesystem")
+        try:
+            renamex_np = ctypes.CDLL(None, use_errno=True).renamex_np
+        except AttributeError as exc:
+            raise CharacterRejected("This filesystem does not support exclusive project publication") from exc
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        if renamex_np(os.fsencode(source), os.fsencode(destination), 0x00000004) == 0:
+            return
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise CharacterRejected("Output must not already exist")
+        raise CharacterRejected("The filesystem could not publish the project without replacing a destination")
+
+    def _project_directories(self, root):
+        directories = []
+        for entries, path in enumerate(sorted(root.rglob("*")), start=1):
+            if entries > 8192 or path.is_symlink():
+                raise CharacterRejected("Project trees must be bounded and contain no symlinks")
+            if path.is_dir():
+                directories.append(str(path.relative_to(root)))
+            elif not path.is_file():
+                raise CharacterRejected("Project trees may contain only regular files and directories")
+        return directories
+
+    def _project_files_from_root(self, root):
+        root = self.path(str(root))
+        prefix = root.relative_to(self.workspace)
+        return [{"path": Path(item["path"]).relative_to(prefix).as_posix(),
+                 "sha256": item["sha256"], "bytes": item["bytes"]}
+                for item in self.project_files(root)]
+
+    def _prepared_record_path(self, prepared_copy_id):
+        if not isinstance(prepared_copy_id, str) or not IDENTIFIER.fullmatch(prepared_copy_id):
+            raise CharacterRejected("Use a prepared copy ID returned by project_prepare_copy")
+        return self.directory / "prepared-copies" / (prepared_copy_id + ".json")
+
+    def _prepared_copy(self, prepared_copy_id):
+        record_path = self._prepared_record_path(prepared_copy_id)
+        record = self.read("prepared-copies/" + prepared_copy_id + ".json")
+        if (not isinstance(record, dict) or record.get("version") != 1
+                or record.get("status") != "prepared"
+                or record.get("prepared_copy_id") != prepared_copy_id):
+            raise CharacterRejected("The prepared copy ID has no verified private copy receipt")
+        source = self.path(record.get("source", ""))
+        destination = self.path(record.get("destination", ""))
+        if (str(source) != record.get("source") or str(destination) != record.get("destination")
+                or source == destination or not source.is_dir() or not destination.is_dir()
+                or source.is_symlink() or destination.is_symlink()
+                or self._directory_identity(source) != record.get("source_identity")
+                or self._directory_identity(destination) != record.get("destination_identity")
+                or not isinstance(record.get("application"), str)
+                or not Path(record["application"]).is_absolute()
+                or not (destination / "Ch Data").is_dir()
+                or (destination / "Ch Data").is_symlink()):
+            raise CharacterRejected("The prepared copy or its recorded source lineage changed")
+        projects = list(destination.glob("*.chproj"))
+        if len(projects) != 1 or projects[0].is_symlink() or not projects[0].is_file():
+            raise CharacterRejected("The prepared copy must retain its exact project file and Ch Data tree")
+        if not record_path.is_file():
+            raise CharacterRejected("The prepared copy receipt is unavailable")
+        return record
+
+    def prepare_copy(self, source, destination, cancelled=None):
+        """Copy one closed saved project into a new workspace path and retain its hash lineage."""
+        source = self.path(source)
+        destination = self.path(destination, new=True)
+        parent = destination.parent
+        if (not parent.is_dir() or source == destination or source in destination.parents
+                or destination in source.parents
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", destination.name)):
+            raise CharacterRejected("Choose a new safe project folder under an existing workspace directory")
+        with self.locked(cancelled):
+            pending = self.read("operation.json")
+            lease = self.read("lease.json")
+            if pending or (lease and lease.get("expires_at", 0) > time.time()):
+                raise CharacterRejected("Resolve the current Character Animator operation and lease before preparing a copy")
+            observed = self.bridge.call("inspect", cancelled=cancelled)
+            state = observed.get("state", {})
+            roots = state.get("project_roots")
+            process_count = state.get("process_count")
+            opened_roots = state.get("project_roots", [])
+            if (state.get("bundle_id") != CHARACTER_BUNDLE_ID
+                    or type(process_count) is not int or process_count not in (0, 1)
+                    or (process_count == 0 and state.get("running") is not False)
+                    or (process_count == 1 and state.get("running") is not True)
+                    or (process_count == 0 and roots not in (None, []))
+                    or (process_count == 1 and not isinstance(roots, list))
+                    or (process_count == 1 and state.get("project_handle_error") is not None)
+                    or any(not isinstance(root, str) or not Path(root).is_absolute() for root in opened_roots)
+                    or source in [Path(root).resolve() for root in opened_roots]
+                    or state.get("authentication_or_permission_prompt") is True):
+                raise CharacterRejected("The source must be closed in one unprompted Character Animator process")
+            if (not source.is_dir() or source.is_symlink()
+                    or not (source / "Ch Data").is_dir() or (source / "Ch Data").is_symlink()):
+                raise CharacterRejected("Source must be a closed saved project with its Ch Data folder")
+            project_files = list(source.glob("*.chproj"))
+            if (len(project_files) != 1 or project_files[0].is_symlink()
+                    or not project_files[0].is_file()):
+                raise CharacterRejected("Source must contain exactly one regular .chproj file")
+            application_path = state.get("application")
+            if not isinstance(application_path, str) or not Path(application_path).is_absolute():
+                raise CharacterRejected("The installed Character Animator application identity is unavailable")
+            source_identity = self._directory_identity(source)
+            parent_identity = self._directory_identity(parent)
+            source_directories = self._project_directories(source)
+            source_files = self._project_files_from_root(source)
+            stage = parent / ("." + destination.name + ".prepare-" + uuid.uuid4().hex)
+            if stage.exists() or stage.is_symlink():
+                raise CharacterRejected("Temporary copy path already exists")
+            published = False
+            try:
+                shutil.copytree(source, stage, symlinks=True)
+                if (self._directory_identity(source) != source_identity
+                        or self._directory_identity(parent) != parent_identity
+                        or self._project_directories(source) != source_directories
+                        or self._project_files_from_root(source) != source_files):
+                    raise CharacterRejected("Source changed while preparing its closed project copy")
+                if (self._project_directories(stage) != source_directories
+                        or self._project_files_from_root(stage) != source_files
+                        or self._directory_identity(parent) != parent_identity
+                        or destination.exists() or destination.is_symlink()):
+                    raise CharacterRejected("Prepared project copy did not match its closed source tree")
+                stage_identity = self._directory_identity(stage)
+                self._publish_directory_exclusive(stage, destination)
+                published = True
+                if self._directory_identity(destination) != stage_identity:
+                    raise CharacterUnknown("Prepared project destination identity changed during publication")
+                copy_files = self._project_files_from_root(destination)
+                if (copy_files != source_files
+                        or self._project_directories(destination) != source_directories
+                        or self._directory_identity(destination) != stage_identity):
+                    raise CharacterUnknown("Published project copy differs from its verified closed source")
+                prepared_copy_id = uuid.uuid4().hex
+                record = {"version": 1, "status": "prepared", "prepared_copy_id": prepared_copy_id,
+                          "application": application_path,
+                          "source": str(source), "source_identity": source_identity,
+                          "source_directories": source_directories, "source_files": source_files,
+                          "destination": str(destination), "destination_identity": stage_identity,
+                          "directories": source_directories, "files": copy_files,
+                          "project_file": project_files[0].name,
+                          "prepared_at": time.time()}
+                record_directory = self.directory / "prepared-copies"
+                record_directory.mkdir(exist_ok=True, mode=0o700)
+                record_path = self._prepared_record_path(prepared_copy_id)
+                if record_path.exists() or record_path.is_symlink():
+                    raise CharacterUnknown("Prepared copy ID already has a private receipt")
+                write_json(record_path, record)
+            except CharacterRejected as exc:
+                if published:
+                    raise CharacterUnknown(
+                        "Project destination was published but verification failed; inspect it"
+                    ) from exc
+                if stage.exists() and not stage.is_symlink():
+                    shutil.rmtree(stage)
+                raise
+            except BaseException as exc:
+                if stage.exists() and not stage.is_symlink():
+                    try:
+                        shutil.rmtree(stage)
+                    except OSError:
+                        pass
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                if isinstance(exc, CharacterUnknown):
+                    raise
+                raise CharacterUnknown("Closed project copy may be incomplete; inspect its new destination") from exc
+        return {"status": "prepared_copy", "prepared_copy_id": prepared_copy_id,
+                "source": str(source), "destination": str(destination),
+                "source_identity": source_identity, "destination_identity": stage_identity,
+                "files": copy_files, "launches_application": False}
+
+    def _verify_prepared_native_root(self, record, state):
+        destination = record["destination"]
+        process_count = state.get("process_count")
+        if (state.get("bundle_id") != CHARACTER_BUNDLE_ID
+                or state.get("application") != record.get("application")
+                or state.get("running") is not True or type(process_count) is not int or process_count != 1
+                or type(state.get("pid")) is not int or state["pid"] <= 0
+                or not isinstance(state.get("launch_time"), (int, float))
+                or state.get("authentication_or_permission_prompt") is True
+                or state.get("project_roots") != [destination]
+                or self._directory_identity(Path(destination)) != record.get("destination_identity")):
+            raise CharacterRejected("Claim requires the exact prepared project root in one verified app process")
+
+    def _resolve_prepared_open(self, packet, prepared, observed, cancelled):
+        original = packet.get("before_native", {}).get("state", {})
+        native_result = packet.get("native")
+        dispatched = native_result.get("state", {}) if isinstance(native_result, dict) else {}
+        current = observed.get("native", {}).get("state", {})
+        if (packet.get("operation") != "open_prepared_copy"
+                or packet.get("state") not in ("pending", "unknown")
+                or packet.get("intent", {}).get("prepared_copy_id") != prepared["prepared_copy_id"]
+                or original.get("running") is not False or original.get("process_count") != 0
+                or original.get("pid") is not None or original.get("launch_time") is not None
+                or original.get("authentication_or_permission_prompt") is True
+                or type(dispatched.get("pid")) is not int or dispatched["pid"] <= 0
+                or dispatched.get("bundle_id") != CHARACTER_BUNDLE_ID
+                or (current.get("pid"), current.get("launch_time"))
+                   != (dispatched.get("pid"), dispatched.get("launch_time"))):
+            raise CharacterRejected("Prepared-copy open outcome cannot be verified against its original process")
+        self._verify_prepared_native_root(prepared, current)
+        result = {"status": "prepared_copy_opened", "completion": "observed",
+                  "prepared_copy_id": prepared["prepared_copy_id"],
+                  "project_id": observed["project_id"], "native": observed["native"]}
+        resolved = dict(packet)
+        resolved.update(state="resolved", resolution="prepared_copy_open_verified", result=result,
+                        native=observed["native"])
+        receipts = self.directory / "operations"
+        receipts.mkdir(exist_ok=True, mode=0o700)
+        receipt = receipts / (packet["operation_id"] + ".json")
+        if receipt.exists():
+            archived = self.read("operations/" + packet["operation_id"] + ".json")
+            archived_result = archived.get("result") if isinstance(archived, dict) else None
+            archived_native = archived.get("native") if isinstance(archived, dict) else None
+            archived_state = archived_native.get("state", {}) if isinstance(archived_native, dict) else {}
+            if (not isinstance(archived, dict)
+                    or archived.get("operation_id") != packet.get("operation_id")
+                    or archived.get("resolution") != "prepared_copy_open_verified"
+                    or archived.get("intent") != packet.get("intent")
+                    or not isinstance(archived_result, dict)
+                    or archived_result.get("status") != "prepared_copy_opened"
+                    or archived_result.get("prepared_copy_id") != prepared["prepared_copy_id"]
+                    or (archived_state.get("pid"), archived_state.get("launch_time"))
+                       != (current.get("pid"), current.get("launch_time"))):
+                raise CharacterRejected("A different operation receipt exists for this prepared-copy open")
+            try:
+                (self.directory / "operation.json").unlink()
+            except OSError as exc:
+                raise CharacterUnknown("Prepared-copy open was verified but its pending journal remains") from exc
+            return
+        try:
+            write_json(receipt, resolved)
+            (self.directory / "operation.json").unlink()
+        except OSError as exc:
+            raise CharacterUnknown("Prepared-copy open was observed but its receipt was not committed") from exc
+
+    def _open_prepared_copy(self, prepared_copy_id, observed, lease, active, cancelled):
+        prepared = self._prepared_copy(prepared_copy_id)
+        state = observed["native"]["state"]
+        if (active or observed["pending_operation"]
+                or state.get("running") is not False or state.get("process_count") != 0
+                or state.get("pid") is not None or state.get("launch_time") is not None
+                or state.get("authentication_or_permission_prompt") is True):
+            raise CharacterRejected("Open a prepared copy only when no Character Animator instance or operation is active")
+        if self._project_files_from_root(prepared["destination"]) != prepared["files"]:
+            raise CharacterRejected("Prepared project bytes changed before opening")
+        if self._project_directories(Path(prepared["destination"])) != prepared["directories"]:
+            raise CharacterRejected("Prepared project structure changed before opening")
+        operation_id = uuid.uuid4().hex
+        project_file = str(Path(prepared["destination"]) / prepared["project_file"])
+        packet = {"version": 1, "operation_id": operation_id, "operation": "open_prepared_copy",
+                  "initial_native_operation": "open_prepared_copy", "parameters": {},
+                  "before_project_id": observed["project_id"], "before_native": observed["native"],
+                  "intent": {"prepared_copy_id": prepared_copy_id,
+                             "project_file": project_file, "project_root": prepared["destination"]},
+                  "created_at": time.time(), "state": "pending", "retry_safe": False}
+        journal = self.directory / "operation.json"
+        if cancelled is not None and cancelled.is_set():
+            raise CharacterRejected("Cancelled before opening the prepared project")
+        write_json(journal, packet)
+        dispatched = False
+        try:
+            native = self.bridge.call("open_prepared_copy", {
+                "prepared_copy_id": prepared_copy_id, "project_root": prepared["destination"],
+                "project_file": project_file, "destination_identity": prepared["destination_identity"]},
+                cancelled=cancelled)
+            dispatched = True
+            packet.update(state="unknown", native=native)
+            write_json(journal, packet)
+            current_state = native.get("state", {})
+            if (current_state.get("pid") is None
+                    or current_state.get("project_roots") != [prepared["destination"]]
+                    or current_state.get("authentication_or_permission_prompt") is True):
+                return {"status": "prepared_copy_open_requested", "completion": "unverified",
+                        "prepared_copy_id": prepared_copy_id, "operation_id": operation_id,
+                        "project_id": None, "native": native, "retry_safe": False,
+                        "launches_application": True}
+            self._resolve_prepared_open(packet, prepared,
+                                        {"project_id": project_identity(current_state), "native": native}, cancelled)
+            return {"status": "prepared_copy_opened", "completion": "observed",
+                    "prepared_copy_id": prepared_copy_id, "operation_id": operation_id,
+                    "project_id": project_identity(current_state), "native": native,
+                    "retry_safe": False, "launches_application": True}
+        except CharacterRejected as exc:
+            if not dispatched:
+                journal.unlink(missing_ok=True)
+                raise
+            packet.update(state="unknown", failure={"code": getattr(exc, "error_code", "OUTCOME_UNKNOWN"),
+                                                     "message": str(exc)[:4000]})
+            write_json(journal, packet)
+            raise CharacterUnknown("Prepared-copy open remains unresolved; inspect its operation journal") from exc
+        except BaseException as exc:
+            packet.update(state="unknown", failure={"code": getattr(exc, "error_code", "OUTCOME_UNKNOWN"),
+                                                     "message": str(exc)[:4000]})
+            write_json(journal, packet)
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            if isinstance(exc, CharacterUnknown):
+                raise
+            raise CharacterUnknown("Prepared-copy open may have started; inspect its operation journal") from exc
 
     def _initial_copy_paths(self, packet):
         parameters, intent = packet.get("parameters"), packet.get("intent")
@@ -215,8 +558,15 @@ class CharacterAnimator:
             if (expected_fingerprint is not None
                     and before["native"]["state"].get("fingerprint") != expected_fingerprint):
                 raise CharacterRejected("Observed selection or native state changed; inspect again before acting")
-            if owned and (not lease.get("owned_root") or lease["owned_root"] not in before["native"]["state"].get("project_roots", [])):
-                raise CharacterRejected("First save a new owned project copy and verify its native identity")
+            if owned:
+                owned_root = lease.get("owned_root")
+                if not owned_root or before["native"]["state"].get("project_roots") != [owned_root]:
+                    raise CharacterRejected("First save or open a new owned project copy and verify its native identity")
+                root = self.path(owned_root)
+                recorded_root_identity = lease.get("owned_root_identity")
+                if (recorded_root_identity is not None
+                        and self._directory_identity(root) != recorded_root_identity):
+                    raise CharacterRejected("The owned project root inode changed after ownership was verified")
             operation_id = uuid.uuid4().hex
             roots = before["native"]["state"].get("project_roots", [])
             if len(roots) != 1:
@@ -381,7 +731,8 @@ class CharacterAnimator:
             if len(files) != 1 or not (destination / "Ch Data").is_dir():
                 raise CharacterUnknown("Native copy lacks its project file or project data")
             refs = self.project_files(destination)
-            lease.update(project_id=project_identity(observed["state"]), owned_root=str(destination))
+            lease.update(project_id=project_identity(observed["state"]), owned_root=str(destination),
+                         owned_root_identity=self._directory_identity(destination))
             return {"status": "owned_copy", "project_id": lease["project_id"],
                     "project_root": str(destination), "project_file": str(files[0]),
                     "files": refs, "original_source_hash": None,
@@ -1313,6 +1664,19 @@ class CharacterAnimator:
             return {**result, "operation_id": operation_id, "retry_safe": False}
 
     def _reconcile_copy_after_exit(self, packet, lease, lease_id, observed, cancelled):
+        recorded_native = packet.get("native")
+        recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
+        last_command = packet.get("last_command")
+        submitted_stage = (last_command == "chooser_continue_directory"
+                           and isinstance(recorded_native, dict)
+                           and recorded_native.get("operation") == "chooser_continue_directory"
+                           and isinstance(recorded_result, dict)
+                           and recorded_result.get("status") == "native_chooser_submitted")
+        menu_dispatched_stage = (last_command is None
+                                 and isinstance(recorded_native, dict)
+                                 and recorded_native.get("operation") == "save_as"
+                                 and isinstance(recorded_result, dict)
+                                 and recorded_result.get("status") == "native_command_dispatched")
         if (not lease or lease_id != lease.get("lease_id")
                 or lease.get("project_id") != packet.get("before_project_id")
                 or lease.get("owned_root") is not None
@@ -1320,16 +1684,14 @@ class CharacterAnimator:
                 or packet.get("operation") != "save_as"
                 or packet.get("initial_native_operation") != "save_as"
                 or packet.get("state") != "unknown"
-                or packet.get("last_command") != "chooser_continue_directory"):
-            raise CharacterRejected("Reconcile requires the matching lease and an unknown initial Save As submission")
+                or not (submitted_stage or menu_dispatched_stage)):
+            raise CharacterRejected("Reconcile requires the matching lease and a recorded initial Save As stage")
 
         source, parent, destination = self._initial_copy_paths(packet)
         source_root = str(source)
         before_native = packet.get("before_native")
-        recorded_native = packet.get("native")
         before_state = before_native.get("state") if isinstance(before_native, dict) else None
         recorded_state = recorded_native.get("state") if isinstance(recorded_native, dict) else None
-        recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
         original_process = None
         if isinstance(before_state, dict):
             original_process = (before_state.get("pid"), before_state.get("launch_time"))
@@ -1365,12 +1727,10 @@ class CharacterAnimator:
                 or before_state.get("project_roots") != [source_root]
                 or not source_observation_matches(recorded_state)
                 or not isinstance(recorded_native, dict)
-                or recorded_native.get("operation") != "chooser_continue_directory"
                 or not isinstance(recorded_result, dict)
-                or recorded_result.get("status") != "native_chooser_submitted"
                 or not isinstance(recorded_native.get("state"), dict)
                 or recorded_native["state"].get("authentication_or_permission_prompt") is True):
-            raise CharacterRejected("Reconcile requires the recorded submitted chooser stage and unchanged source identity")
+            raise CharacterRejected("Reconcile requires the recorded Save As stage and unchanged source identity")
 
         def directory_identity(path):
             stat = path.stat()
@@ -1398,7 +1758,9 @@ class CharacterAnimator:
                   "native": fresh}
         resolved = dict(packet)
         resolved.update(state="resolved", resolution="reconcile_copy_after_exit",
-                        reconciliation_basis="submitted_save_as_process_exited_with_destination_absent",
+                        reconciliation_basis=("submitted_save_as_process_exited_with_destination_absent"
+                                               if submitted_stage else
+                                               "menu_dispatched_save_as_process_exited_before_chooser_submission"),
                         reconciliation_native=fresh, result=result)
         current_lease = self.read("lease.json")
         if (not current_lease or current_lease.get("lease_id") != lease_id

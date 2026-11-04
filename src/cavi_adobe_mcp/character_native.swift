@@ -4,6 +4,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import CryptoKit
+import Darwin
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -366,6 +367,58 @@ final class Observation {
               let roots = observation.state["project_roots"] as? [String], roots == [requested] else {
             try fail("PROJECT_IDENTITY_UNAVAILABLE", "An explicit owned project root must match the sole native project-data handle root")
         }
+    }
+    func openPreparedCopy(_ parameters: [String: Any], _ observation: Observation) async throws -> [String: Any] {
+        guard observation.application == nil,
+              observation.state["running"] as? Bool == false,
+              observation.state["process_count"] as? Int == 0,
+              observation.state["accessibility_trusted"] as? Bool == true,
+              observation.state["authentication_or_permission_prompt"] as? Bool != true,
+              let preparedID = parameters["prepared_copy_id"] as? String,
+              preparedID.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+              let rootString = parameters["project_root"] as? String,
+              let projectString = parameters["project_file"] as? String,
+              let identity = parameters["destination_identity"] as? [String: Any],
+              let expectedDevice = (identity["device"] as? NSNumber)?.int64Value,
+              let expectedInode = (identity["inode"] as? NSNumber)?.int64Value else {
+            try fail("INVALID_ARGUMENT", "Open requires one verified prepared project while Character Animator is stopped")
+        }
+        let root = URL(fileURLWithPath: rootString).standardizedFileURL.resolvingSymlinksInPath()
+        let project = URL(fileURLWithPath: projectString).standardizedFileURL.resolvingSymlinksInPath()
+        let chData = root.appendingPathComponent("Ch Data", isDirectory: true)
+        guard root.path == rootString, project.path == projectString,
+              project.deletingLastPathComponent() == root,
+              project.pathExtension == "chproj",
+              let chDataAttributes = try? FileManager.default.attributesOfItem(atPath: chData.path),
+              chDataAttributes[.type] as? FileAttributeType == .typeDirectory,
+              (try? chData.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              let rootAttributes = try? FileManager.default.attributesOfItem(atPath: root.path),
+              rootAttributes[.type] as? FileAttributeType == .typeDirectory,
+              rootAttributes[.systemNumber] as? NSNumber == NSNumber(value: expectedDevice),
+              rootAttributes[.systemFileNumber] as? NSNumber == NSNumber(value: expectedInode),
+              let projectAttributes = try? FileManager.default.attributesOfItem(atPath: project.path),
+              projectAttributes[.type] as? FileAttributeType == .typeRegular,
+              (try? project.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+            try fail("PREPARED_COPY_MISMATCH", "The prepared project file or recorded root identity changed")
+        }
+        phase = "prepared_copy_open_dispatch"
+        dispatched = true
+        primaryCommandDispatched = true
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        let opened = try await NSWorkspace.shared.open([project], withApplicationAt: applicationURL,
+                                                       configuration: configuration)
+        guard opened.bundleIdentifier == characterBundleID,
+              opened.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL,
+              opened.processIdentifier > 0 else {
+            try fail("OPEN_IDENTITY_MISMATCH", "The prepared project did not open in the verified Character Animator bundle")
+        }
+        let after = try observe()
+        return ["state": after.state,
+                "result": ["status": "native_prepared_copy_open_requested", "completion": "unverified",
+                           "prepared_copy_id": preparedID, "project_root": root.path,
+                           "process_id": Int(opened.processIdentifier),
+                           "launch_time": opened.launchDate?.timeIntervalSince1970 ?? 0]]
     }
     func perform(_ element: AXUIElement, action: String = "AXPress") throws {
         guard actions(element).contains(action), bool(element, "AXEnabled") != false else { try fail("CONTROL_UNAVAILABLE", "Observed native control does not support this enabled action") }
@@ -1078,6 +1131,7 @@ final class Observation {
         phase = "observation"
         let observation = try observe(full: operation != "status")
         if operation == "status" || operation == "inspect" { return ["state": observation.state, "result": ["status": "observed"]] }
+        if operation == "open_prepared_copy" { return try await openPreparedCopy(parameters, observation) }
         if operation == "capture" {
             guard observation.state["authentication_or_permission_prompt"] as? Bool != true else { try fail("AUTHENTICATION_BOUNDARY", "Application prompt requires manual handling") }
             return ["state": observation.state, "result": try await capture(observation, parameters: parameters)]

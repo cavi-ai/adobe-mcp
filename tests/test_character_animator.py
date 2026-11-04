@@ -1,12 +1,16 @@
 """Ownership/error/protocol fixtures; these do not establish native CA behavior."""
 
 import copy
+import ctypes
+import errno
 import os
+import shutil
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cavi_mcp_core.contracts import failure
@@ -38,6 +42,7 @@ class NativeFixture:
         self.fail_export_destination = False
         self.hide_chooser_after_command = False
         self.export_inspect_states = []
+        self.open_without_root = False
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
         self.calls.append(operation)
@@ -61,6 +66,18 @@ class NativeFixture:
             return {"version": 1, "ok": True, "operation": operation,
                     "state": copy.deepcopy(self.state),
                     "result": {"status": "native_application_focused", "completion": "observed", "ui_only": True}}
+        if operation == "open_prepared_copy":
+            root = (parameters or {})["project_root"]
+            self.state.update(bundle_id="com.adobe.Character-Animator.application",
+                              application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+                              pid=99, launch_time=99.0, running=True, process_count=1,
+                              authentication_or_permission_prompt=False,
+                              project_roots=[] if self.open_without_root else [root],
+                              fingerprint="prepared-open")
+            return {"version": 1, "ok": True, "operation": operation,
+                    "state": copy.deepcopy(self.state),
+                    "result": {"status": "native_prepared_copy_open_requested",
+                               "completion": "unverified", "process_id": 99, "launch_time": 99.0}}
         if operation == "save_as":
             self.state["fingerprint"] = "chooser"
             self.state["focused_window"] = {"identifier": "save-panel",
@@ -213,6 +230,192 @@ class CharacterOwnershipTests(unittest.TestCase):
         observed = self.client.inspect()
         return self.client.session("claim", "fixture", observed["project_id"])
 
+    def test_prepare_closed_copy_open_exact_root_and_claim_inode_ownership(self):
+        source = self.closed_character_project()
+        result = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
+        destination = (self.root / "workspace/copies/PreparedProject").resolve()
+
+        self.assertEqual(result["status"], "prepared_copy")
+        self.assertFalse(result["launches_application"])
+        self.assertEqual(result["destination_identity"], self.client._directory_identity(destination))
+        self.assertEqual(result["files"], self.client._project_files_from_root(source))
+        self.assertEqual(result["files"], self.client._project_files_from_root(destination))
+        self.assertFalse(self.native.state["running"])
+
+        opened = self.client.session("open_prepared_copy", prepared_copy_id=result["prepared_copy_id"])
+        self.assertEqual(opened["status"], "prepared_copy_opened")
+        self.assertEqual(opened["completion"], "observed")
+        self.assertEqual(opened["native"]["state"]["project_roots"], [str(destination)])
+        self.assertIsNone(self.client.read("operation.json"))
+
+        observed = self.client.inspect()
+        lease = self.client.session("claim", "fixture", observed["project_id"],
+                                    prepared_copy_id=result["prepared_copy_id"])
+        self.assertEqual(lease["owned_root"], str(destination))
+        self.assertEqual(lease["prepared_copy_id"], result["prepared_copy_id"])
+        stored_lease = self.client.read("lease.json")
+        self.assertEqual(stored_lease["owned_root_identity"], self.client._directory_identity(destination))
+
+    def test_claim_resolves_only_the_matching_unknown_prepared_open_without_replaying(self):
+        self.closed_character_project()
+        prepared = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
+        self.native.open_without_root = True
+        opened = self.client.session("open_prepared_copy", prepared_copy_id=prepared["prepared_copy_id"])
+        self.assertEqual(opened["status"], "prepared_copy_open_requested")
+        packet = self.client.read("operation.json")
+        self.assertEqual(packet["operation"], "open_prepared_copy")
+        self.assertEqual(packet["state"], "unknown")
+        open_calls = self.native.calls.count("open_prepared_copy")
+
+        with self.assertRaisesRegex(CharacterRejected, "no Character Animator instance or operation is active"):
+            self.client.session("open_prepared_copy", prepared_copy_id=prepared["prepared_copy_id"])
+        self.assertEqual(self.native.calls.count("open_prepared_copy"), open_calls)
+
+        destination = (self.root / "workspace/copies/PreparedProject").resolve()
+        self.native.state.update(project_roots=[str(destination)], fingerprint="prepared-root-loaded")
+        observed = self.client.inspect()
+        lease = self.client.session("claim", "fixture", observed["project_id"],
+                                    prepared_copy_id=prepared["prepared_copy_id"])
+        self.assertEqual(lease["owned_root"], str(destination))
+        self.assertIsNone(self.client.read("operation.json"))
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["resolution"], "prepared_copy_open_verified")
+
+    def test_prepared_copy_claim_rejects_changed_process_root_or_inode(self):
+        source = self.closed_character_project()
+        prepared = self.client.prepare_copy("ClosedProject", "copies/PreparedProject")
+        destination = self.root / "workspace/copies/PreparedProject"
+        lease_file = self.client.directory / "lease.json"
+        original_state = copy.deepcopy(self.native.state)
+        cases = (
+            ("wrong root", lambda: self.native.state.update(
+                bundle_id="com.adobe.Character-Animator.application", application=original_state["application"],
+                running=True, process_count=1, pid=99, launch_time=99.0,
+                project_roots=[str(self.root / "workspace/other")])),
+            ("permission prompt", lambda: self.native.state.update(
+                bundle_id="com.adobe.Character-Animator.application", application=original_state["application"],
+                running=True, process_count=1, pid=99, launch_time=99.0,
+                project_roots=[str(destination)], authentication_or_permission_prompt=True)),
+        )
+        for label, damage in cases:
+            with self.subTest(case=label):
+                self.native.state = copy.deepcopy(original_state)
+                damage()
+                observed = self.client.inspect()
+                with self.assertRaises(CharacterRejected):
+                    self.client.session("claim", "fixture", observed["project_id"],
+                                        prepared_copy_id=prepared["prepared_copy_id"])
+                self.assertFalse(lease_file.exists())
+
+        self.native.state = copy.deepcopy(original_state)
+        shutil.rmtree(destination)
+        shutil.copytree(source, destination)
+        self.native.state.update(bundle_id="com.adobe.Character-Animator.application",
+                                 application=original_state["application"], running=True,
+                                 process_count=1, pid=99, launch_time=99.0,
+                                 project_roots=[str(destination)])
+        observed = self.client.inspect()
+        with self.assertRaisesRegex(CharacterRejected, "prepared copy or its recorded source lineage changed"):
+            self.client.session("claim", "fixture", observed["project_id"],
+                                prepared_copy_id=prepared["prepared_copy_id"])
+        self.assertFalse(lease_file.exists())
+
+    def test_prepare_closed_copy_rejects_open_symlinked_or_mutating_sources(self):
+        source = self.closed_character_project()
+        self.native.state["project_roots"] = [str(source)]
+        with self.assertRaisesRegex(CharacterRejected, "source must be closed"):
+            self.client.prepare_copy("ClosedProject", "copies/OpenSource")
+        self.assertFalse((self.root / "workspace/copies/OpenSource").exists())
+
+        self.native.state.update(running=False, process_count=0, pid=None, launch_time=None)
+        self.native.state.pop("project_roots", None)
+        outside = self.root / "outside.txt"
+        outside.write_text("outside")
+        (source / "Ch Data/external-link").symlink_to(outside)
+        with self.assertRaises(CharacterRejected):
+            self.client.prepare_copy("ClosedProject", "copies/SymlinkSource")
+        self.assertFalse((self.root / "workspace/copies/SymlinkSource").exists())
+
+    def test_prepare_closed_copy_rejects_source_changes_and_never_adopts_unreceipted_copy(self):
+        source = self.closed_character_project()
+        original_copytree = shutil.copytree
+
+        def mutate_source(src, dst, *args, **kwargs):
+            result = original_copytree(src, dst, *args, **kwargs)
+            (source / "Ch Data/projectdata.rope").write_bytes(b"changed during copy")
+            return result
+
+        with (patch("cavi_adobe_mcp.character_animator.shutil.copytree", mutate_source),
+              self.assertRaisesRegex(CharacterRejected, "Source changed while preparing")):
+            self.client.prepare_copy("ClosedProject", "copies/ChangedSource")
+        self.assertFalse((self.root / "workspace/copies/ChangedSource").exists())
+
+        fixed_id = "2" * 32
+        ids = [SimpleNamespace(hex="1" * 32), SimpleNamespace(hex=fixed_id)]
+        original_write = write_json
+
+        def fail_receipt(path, value):
+            if Path(path).parent.name == "prepared-copies":
+                raise OSError("fixture crash after publication")
+            return original_write(path, value)
+
+        with (patch("cavi_adobe_mcp.character_animator.uuid.uuid4", side_effect=ids),
+              patch("cavi_adobe_mcp.character_animator.write_json", fail_receipt),
+              self.assertRaisesRegex(CharacterUnknown, "may be incomplete")):
+            self.client.prepare_copy("ClosedProject", "copies/UnreceiptedCopy")
+        destination = self.root / "workspace/copies/UnreceiptedCopy"
+        self.assertTrue(destination.is_dir())
+        self.native.state.update(bundle_id="com.adobe.Character-Animator.application",
+                                 application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+                                 running=True, process_count=1, pid=99, launch_time=99.0,
+                                 project_roots=[str(destination)])
+        observed = self.client.inspect()
+        with self.assertRaisesRegex(CharacterRejected, "no verified private copy receipt"):
+            self.client.session("claim", "fixture", observed["project_id"], prepared_copy_id=fixed_id)
+
+    def test_prepare_copy_preserves_destination_created_at_exclusive_publish(self):
+        self.closed_character_project()
+        destination = (self.root / "workspace/copies/RaceDestination").resolve()
+        unrelated_inode = None
+
+        def racing_rename(source, target, flags):
+            nonlocal unrelated_inode
+            self.assertEqual(flags, 0x00000004)
+            Path(os.fsdecode(target)).mkdir()
+            unrelated_inode = Path(os.fsdecode(target)).stat().st_ino
+            ctypes.set_errno(errno.EEXIST)
+            return -1
+
+        with patch("cavi_adobe_mcp.character_animator.ctypes.CDLL") as cdll:
+            cdll.return_value.renamex_np = racing_rename
+            with self.assertRaisesRegex(CharacterRejected, "Output must not already exist"):
+                self.client.prepare_copy("ClosedProject", "copies/RaceDestination")
+
+        self.assertTrue(destination.is_dir())
+        self.assertEqual(destination.stat().st_ino, unrelated_inode)
+        self.assertEqual(list(destination.iterdir()), [])
+        self.assertEqual(list((self.root / "workspace/copies").glob(".RaceDestination.prepare-*")), [])
+        self.assertEqual(list((self.client.directory / "prepared-copies").glob("*.json")), [])
+
+    def test_prepare_copy_reports_post_publish_verification_failure_as_unknown(self):
+        self.closed_character_project()
+        destination = (self.root / "workspace/copies/PublishedCopy").resolve()
+        original_directories = self.client._project_directories
+
+        def inject_symlink_after_publish(root):
+            if root == destination:
+                (root / "Ch Data/unexpected-link").symlink_to(self.root / "outside.txt")
+                raise CharacterRejected("Project tree changed during final verification")
+            return original_directories(root)
+
+        with (patch.object(self.client, "_project_directories", side_effect=inject_symlink_after_publish),
+              self.assertRaisesRegex(CharacterUnknown, "was published but verification failed")):
+            self.client.prepare_copy("ClosedProject", "copies/PublishedCopy")
+
+        self.assertTrue(destination.is_dir())
+        self.assertTrue((destination / "Ch Data/unexpected-link").is_symlink())
+        self.assertFalse((self.client.directory / "prepared-copies").exists())
+
     def pending_save_as(self):
         lease = self.claim()
         self.native.fail = True
@@ -272,6 +475,31 @@ class CharacterOwnershipTests(unittest.TestCase):
             "authentication_or_permission_prompt": False,
         }
         return lease, packet, source, parent / "MaraWelcomeComplete-v001"
+
+    def pending_dispatched_save_as_after_exit(self):
+        lease, packet, source, destination = self.pending_submitted_save_as_after_exit()
+        packet["last_command"] = None
+        packet["native"]["operation"] = "save_as"
+        packet["native"]["result"] = {"status": "native_command_dispatched",
+                                        "completion": "unverified", "retry_safe": False}
+        write_json(self.client.directory / "operation.json", packet)
+        return lease, packet, source, destination
+
+    def closed_character_project(self):
+        source = self.root / "workspace/ClosedProject"
+        (source / "Ch Data").mkdir(parents=True)
+        (source / "ClosedProject.chproj").write_bytes(b"closed project bytes")
+        (source / "Ch Data/projectdata.rope").write_bytes(b"closed project data")
+        (source / "Ch Data/repo.noindex").mkdir()
+        (source / "Ch Data/repo.noindex/interprocess.lock").write_bytes(b"")
+        self.native.state.update(
+            bundle_id="com.adobe.Character-Animator.application",
+            application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            running=False, process_count=0, pid=None, launch_time=None,
+            authentication_or_permission_prompt=False,
+            fingerprint="character-stopped")
+        self.native.state.pop("project_roots", None)
+        return source.resolve()
 
     def pending_unknown_import(self):
         lease = self.claim()
@@ -1035,6 +1263,57 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual({path.relative_to(source): path.read_bytes()
                           for path in source.rglob("*") if path.is_file()}, source_files)
 
+    def test_reconcile_initial_menu_dispatch_after_exit_records_no_copy_without_submission(self):
+        lease, packet, source, destination = self.pending_dispatched_save_as_after_exit()
+        result = self.client.operation_control(
+            "reconcile_copy_after_exit", packet["operation_id"], lease["lease_id"])
+
+        self.assertEqual(result["status"], "destination_absent_after_process_exit")
+        self.assertEqual(result["completion"], "no_copy_verified")
+        self.assertFalse(destination.exists())
+        self.assertEqual(self.native.calls[-2:], ["inspect", "inspect"])
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["reconciliation_basis"],
+                         "menu_dispatched_save_as_process_exited_before_chooser_submission")
+        self.assertIsNone(archived["last_command"])
+        self.assertEqual(archived["native"]["operation"], "save_as")
+        self.assertEqual(archived["native"]["result"]["status"], "native_command_dispatched")
+        self.assertIsNone(self.client.read("operation.json"))
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        self.assertTrue(source.is_dir())
+
+    def test_reconcile_initial_menu_dispatch_rejects_wrong_stage_and_running_process(self):
+        lease, packet, _, destination = self.pending_dispatched_save_as_after_exit()
+        original_lease = self.client.read("lease.json")
+        original_packet = copy.deepcopy(packet)
+        cases = (
+            ("wrong native operation", lambda damaged: damaged["native"].update(operation="chooser_destination")),
+            ("submitted status", lambda damaged: damaged["native"]["result"].update(
+                status="native_chooser_submitted")),
+            ("last command present", lambda damaged: damaged.update(last_command="chooser_destination")),
+        )
+        for label, damage in cases:
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(original_packet)
+                damage(damaged)
+                write_json(self.client.directory / "operation.json", damaged)
+                self.native.state.update(running=False, process_count=0, pid=None, launch_time=None,
+                                         project_roots=[])
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("reconcile_copy_after_exit", packet["operation_id"],
+                                                  lease["lease_id"])
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                self.assertEqual(self.client.read("lease.json"), original_lease)
+                self.assertFalse(destination.exists())
+        write_json(self.client.directory / "operation.json", original_packet)
+        self.native.state.update(running=True, process_count=1, pid=29112,
+                                 launch_time=1793689177.654345, project_roots=[])
+        with self.assertRaisesRegex(CharacterRejected, "app to be stopped"):
+            self.client.operation_control("reconcile_copy_after_exit", packet["operation_id"],
+                                          lease["lease_id"])
+        self.assertEqual(self.client.read("operation.json"), original_packet)
+        self.assertEqual(self.client.read("lease.json"), original_lease)
+
     def test_reconcile_submitted_copy_after_exit_rejects_unsupported_or_changed_evidence(self):
         lease, packet, _, destination = self.pending_submitted_save_as_after_exit()
         original_lease = self.client.read("lease.json")
@@ -1218,9 +1497,16 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                 for tool in tools.values():
                     self.assertTrue(tool.output_schema["required"], tool.name)
-                self.assertIn("lease_id", tools["session_control"].output_schema["properties"])
+                session_result = tools["session_control"].output_schema["properties"]["result"]["anyOf"]
+                self.assertEqual(len(session_result), 2)
                 self.assertIn("resume", tools["session_control"].input_schema["properties"]["action"]["enum"])
+                self.assertIn("open_prepared_copy",
+                              tools["session_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("pending_operation_id", tools["session_control"].input_schema["properties"])
+                self.assertIn("prepared_copy_id", tools["session_control"].input_schema["properties"])
+                self.assertIn("project_prepare_copy", tools)
+                self.assertIn("prepared_copy_id",
+                              tools["project_prepare_copy"].output_schema["properties"])
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("reconcile_unsubmitted_copy",

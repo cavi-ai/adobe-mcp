@@ -49,6 +49,30 @@ class CharacterOwnership(Result):
     expires_at: float | None
     state: Literal["owned", "unclaimed"]
     pending_operation: dict[str, Any] | None
+    prepared_copy_id: str | None = None
+    owned_root: str | None = None
+
+
+class CharacterPreparedCopy(Result):
+    status: Literal["prepared_copy"]
+    prepared_copy_id: str
+    source: str
+    destination: str
+    source_identity: dict[str, int]
+    destination_identity: dict[str, int]
+    files: list[dict[str, Any]]
+    launches_application: Literal[False]
+
+
+class CharacterPreparedOpen(Result):
+    status: Literal["prepared_copy_opened", "prepared_copy_open_requested"]
+    completion: Literal["observed", "unverified"]
+    prepared_copy_id: str
+    operation_id: str
+    project_id: str | None
+    native: dict[str, Any]
+    retry_safe: Literal[False]
+    launches_application: Literal[True]
 
 
 class CharacterCapture(Result):
@@ -188,19 +212,32 @@ async def capture(directory: str) -> CharacterCapture:
 
 
 @mcp.tool(annotations=WRITE)
-async def session_control(action: Literal["inspect", "claim", "renew", "release", "resume"],
+async def session_control(action: Literal["inspect", "claim", "renew", "release", "resume",
+                                          "open_prepared_copy"],
                           owner: str | None = None, expected_project: str | None = None,
                           lease_id: str | None = None,
                           ttl_seconds: Annotated[StrictInt, Field(ge=30, le=3600)] = 600,
-                          pending_operation_id: str | None = None) -> CharacterOwnership:
+                          pending_operation_id: str | None = None,
+                          prepared_copy_id: str | None = None) -> CharacterOwnership | CharacterPreparedOpen:
     """Claim, renew, release, or resume a matching expired lease for one unknown operation.
 
     Resume requires the expired lease ID, same owner, project ID and exact unknown operation ID. It renews
-    ownership after process/root checks and dispatches no native command or chooser action.
+    ownership after process/root checks and dispatches no native command or chooser action. Open a prepared
+    copy only by its private ID; inspect that exact native root before claiming it.
     """
     return await execute(lambda cancelled: client().session(action, owner, expected_project,
                                                            lease_id, ttl_seconds, cancelled,
-                                                           pending_operation_id))
+                                                           pending_operation_id, prepared_copy_id))
+
+
+@mcp.tool(annotations=WRITE)
+async def project_prepare_copy(source: str, destination: str) -> CharacterPreparedCopy:
+    """Copy a closed saved workspace .chproj tree and verify its file hashes before native opening.
+
+    The source must not be open in Character Animator. This creates only a new workspace copy;
+    use its prepared_copy_id with session_control to open the exact copy and then claim it.
+    """
+    return await execute(lambda cancelled: client().prepare_copy(source, destination, cancelled))
 
 
 @mcp.tool(annotations=MUTATE)

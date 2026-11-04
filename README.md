@@ -73,6 +73,12 @@ keep them private.
 - Dimension: `dimension_status`, `dimension_launch`, `dimension_inspect`,
   `dimension_render_start`, `dimension_render_inspect`.
 
+For a closed Character Animator project, use `project_prepare_copy` to copy its saved
+`.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
+`prepared_copy_id` to `session_control(action="open_prepared_copy")`, inspect the actual
+opened project root, then use `session_control(action="claim", prepared_copy_id=...)` to
+establish ownership before editing. Open and claim operate on that exact prepared copy.
+
 Every tool error returns one structured result (`code`, `outcome`, `next_action`) from
 [`cavi-mcp-core`](https://github.com/cavi-ai/mcp-core). An `unknown` outcome means the
 application may have changed: inspect it, or resolve the recorded operation with the
