@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 - 2026-11-04
+
+### Changed
+
+- Releases build and test on Ubuntu runners; the unit matrix also runs on Ubuntu.
+
 ## 0.2.1 - 2026-11-04
 
 ### Fixed
