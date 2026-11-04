@@ -103,12 +103,22 @@ class CharacterAnimator:
                 original_observation = packet.get("native") or packet.get("before_native")
                 original_state = original_observation.get("state") if isinstance(original_observation, dict) else None
                 owned_root = lease.get("owned_root")
-                if (not isinstance(original_state, dict) or not isinstance(owned_root, str)
-                        or packet.get("parameters", {}).get("project_root") != owned_root
-                        or observed["native"]["state"].get("project_roots") != [owned_root]
-                        or observed["native"]["state"].get("authentication_or_permission_prompt") is True
-                        or (observed["native"]["state"].get("pid"),
-                            observed["native"]["state"].get("launch_time"))
+                if "owned_root" not in lease:
+                    raise CharacterRejected("Resume requires the original lease ownership state")
+                if owned_root is None:
+                    source, _, _ = self._initial_copy_paths(packet)
+                    expected_root = str(source)
+                else:
+                    expected_root = owned_root
+                state = observed["native"]["state"]
+                if (not isinstance(original_state, dict) or not isinstance(expected_root, str)
+                        or packet.get("parameters", {}).get("project_root") != expected_root
+                        or state.get("project_roots") != [expected_root]
+                        or (owned_root is None and
+                            (original_state.get("project_roots") != [expected_root]
+                             or project_identity(original_state) != packet.get("before_project_id")))
+                        or state.get("authentication_or_permission_prompt") is True
+                        or (state.get("pid"), state.get("launch_time"))
                         != (original_state.get("pid"), original_state.get("launch_time"))):
                     raise CharacterRejected("Resume requires the same recorded process and sole owned project root")
                 lease = {**lease, "lease_id": uuid.uuid4().hex,
@@ -144,6 +154,50 @@ class CharacterAnimator:
         if new and path.exists():
             raise CharacterRejected("Output must not already exist")
         return path
+
+    def _initial_copy_paths(self, packet):
+        parameters, intent = packet.get("parameters"), packet.get("intent")
+        source_root = parameters.get("project_root") if isinstance(parameters, dict) else None
+        if (packet.get("operation") != "save_as"
+                or packet.get("initial_native_operation") != "save_as"
+                or not isinstance(intent, dict)):
+            raise CharacterRejected("This operation is not a recorded initial Save As copy")
+        name = intent.get("name")
+        if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
+            raise CharacterRejected("Initial Save As requires its recorded copy name")
+        if not isinstance(source_root, str) or not Path(source_root).is_absolute():
+            raise CharacterRejected("Initial Save As requires its recorded absolute source root")
+        source = Path(source_root)
+        try:
+            canonical_source = source.resolve(strict=True)
+        except OSError as exc:
+            raise CharacterRejected("Initial Save As source root is unavailable") from exc
+        directory = self.path(intent.get("directory"))
+        destination = self.path(intent.get("destination"), new=True)
+        expected_destination = self.path(str(directory / name), new=True)
+        if (canonical_source != source or not source.is_dir()
+                or str(directory) != intent.get("directory") or not directory.is_dir()
+                or str(destination) != intent.get("destination")
+                or destination != expected_destination or destination == source):
+            raise CharacterRejected("Initial Save As requires the exact new workspace copy destination")
+        return source, directory, destination
+
+    @staticmethod
+    def _chooser_visible(state, kind, allow_go_to):
+        titles = {"save_as": ("save-panel", "Save Project As"),
+                  "import": ("open-panel", "Import"),
+                  "export_png_wav": ("save-panel", "Export Scene"),
+                  "open_project": ("open-panel", "Open Project")}
+        panel = titles.get(kind)
+        if panel is None:
+            return False
+        focused = state.get("focused_window") or {}
+        if focused.get("identifier") == panel[0] and focused.get("title") == panel[1]:
+            return True
+        return (allow_go_to and focused.get("identifier") == "GoToWindow"
+                and focused.get("role") == "AXSheet"
+                and any(window.get("identifier") == panel[0] and window.get("title") == panel[1]
+                        for window in state.get("windows", []) if isinstance(window, dict)))
 
     def mutate(self, operation, parameters, lease_id, *, owned=True, cancelled=None,
                continuation=None, intent=None, expected_fingerprint=None,
@@ -217,11 +271,36 @@ class CharacterAnimator:
                         current = self.bridge.call("inspect", cancelled=cancelled)
                         if project_identity(current["state"]) != project_identity(native["state"]):
                             raise CharacterUnknown("Native project changed between workflow steps")
-                        if command == "chooser_destination":
+                        if command in ("chooser_destination", "chooser_continue_directory"):
                             kind = arguments.get("kind")
-                            chooser_title = {"save_as": "Save Project As", "import": "Import",
-                                             "export_png_wav": "Export Scene"}.get(kind)
-                            chooser_id = "open-panel" if kind == "import" else "save-panel"
+                            allow_go_to = command == "chooser_continue_directory"
+                            if not self._chooser_visible(current["state"], kind, allow_go_to):
+                                state = current["state"]
+                                focused = state.get("focused_window") or {}
+                                main_window = (state.get("frontmost") is False
+                                               and focused.get("role") == "AXLayoutArea"
+                                               and focused.get("title") == "Character Animator")
+                                modal = (focused.get("modal") is True
+                                         or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                                for window in state.get("windows", [])
+                                                if isinstance(window, dict)))
+                                if (not main_window or modal
+                                        or state.get("authentication_or_permission_prompt") is True):
+                                    raise CharacterRejected("Native chooser is unavailable and the app is not a safe background main window")
+                                activated = self.bridge.call(
+                                    "focus", {"kind": kind, "project_root": arguments.get("project_root")},
+                                    expected=state, cancelled=cancelled)
+                                activated_state = activated.get("state", {})
+                                if (project_identity(activated_state) != project_identity(native["state"])
+                                        or activated_state.get("project_roots") != [arguments.get("project_root")]
+                                        or (activated_state.get("pid"), activated_state.get("launch_time"))
+                                        != (state.get("pid"), state.get("launch_time"))
+                                        or activated_state.get("frontmost") is not True
+                                        or activated_state.get("authentication_or_permission_prompt") is True
+                                        or not self._chooser_visible(activated_state, kind, allow_go_to=True)):
+                                    raise CharacterRejected("Activation did not expose the exact same-process native chooser")
+                                current = activated
+                                previous = activated_state.get("fingerprint")
                             deadline = time.monotonic() + 5
                             previous = current["state"].get("fingerprint")
                             stable = False
@@ -231,9 +310,7 @@ class CharacterAnimator:
                                 if project_identity(settled["state"]) != project_identity(native["state"]):
                                     raise CharacterUnknown("Native project changed while the Save As panel settled")
                                 fingerprint = settled["state"].get("fingerprint")
-                                focused = settled["state"].get("focused_window") or {}
-                                if (focused.get("identifier") == chooser_id
-                                        and focused.get("title") == chooser_title
+                                if (self._chooser_visible(settled["state"], kind, allow_go_to)
                                         and fingerprint == previous):
                                     current = settled
                                     stable = True
@@ -284,7 +361,8 @@ class CharacterAnimator:
                 raise CharacterUnknown("Native source project identity is ambiguous")
             step("chooser_destination", {"kind": "save_as", "directory": str(parent),
                                          "basename": name, "project_root": roots[0]})
-            arguments = {"directory": str(parent), "basename": name, "project_root": roots[0]}
+            arguments = {"kind": "save_as", "directory": str(parent),
+                         "basename": name, "project_root": roots[0]}
             directory = step("chooser_continue_directory", arguments)
             if directory["result"]["status"] == "native_directory_requested":
                 step("chooser_continue_directory", arguments)
@@ -552,7 +630,8 @@ class CharacterAnimator:
     def operation_control(self, action, operation_id, lease_id=None, cancelled=None,
                           user_confirmed_cancelled=False):
         if action not in ("inspect", "verify_copy", "continue_copy", "continue_import", "continue_export",
-                          "confirm_cancelled_import", "cancel_unsubmitted") or not IDENTIFIER.fullmatch(operation_id):
+                          "confirm_cancelled_import", "cancel_unsubmitted",
+                          "reconcile_unsubmitted_copy") or not IDENTIFIER.fullmatch(operation_id):
             raise CharacterRejected("Use a known operation ID and a supported operation control action")
         if action == "confirm_cancelled_import" and type(user_confirmed_cancelled) is not bool:
             raise CharacterRejected("user_confirmed_cancelled must be a strict boolean")
@@ -581,6 +660,78 @@ class CharacterAnimator:
             state = observed["state"]
             if (state.get("pid"), state.get("launch_time")) != (original.get("pid"), original.get("launch_time")):
                 raise CharacterRejected("The native application process changed; outcome remains unresolved")
+            if action == "reconcile_unsubmitted_copy":
+                source, _, destination = self._initial_copy_paths(packet)
+                source_root = str(source)
+                recorded_native = packet.get("native")
+                recorded_result = recorded_native.get("result") if isinstance(recorded_native, dict) else None
+                recorded_state = recorded_native.get("state") if isinstance(recorded_native, dict) else None
+                before_native = packet.get("before_native")
+                before_state = before_native.get("state") if isinstance(before_native, dict) else None
+
+                def has_modal_or_chooser(native_state):
+                    focus = native_state.get("focused_window") or {}
+                    chooser_ids = {"save-panel", "GoToWindow", "open-panel"}
+                    chooser_titles = {"Save Project As", "Export Scene", "Import"}
+                    windows = native_state.get("windows", [])
+                    return (native_state.get("authentication_or_permission_prompt") is True
+                            or focus.get("modal") is True or focus.get("role") == "AXSheet"
+                            or focus.get("identifier") in chooser_ids
+                            or focus.get("title") in chooser_titles
+                            or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                   or window.get("identifier") in chooser_ids
+                                   or window.get("title") in chooser_titles
+                                   for window in windows if isinstance(window, dict)))
+
+                if (lease.get("owned_root") is not None
+                        or lease.get("project_id") != packet.get("before_project_id")
+                        or packet.get("last_command") != "chooser_destination"
+                        or not isinstance(recorded_native, dict)
+                        or recorded_native.get("operation") != "chooser_destination"
+                        or not isinstance(recorded_result, dict)
+                        or recorded_result.get("status") != "native_chooser_directory_requested"
+                        or not isinstance(original, dict)
+                        or not isinstance(original.get("pid"), int)
+                        or original.get("launch_time") is None
+                        or not isinstance(recorded_state, dict)
+                        or recorded_state.get("project_roots") != [source_root]
+                        or project_identity(recorded_state) != packet.get("before_project_id")
+                        or not isinstance(before_state, dict)
+                        or before_state.get("project_roots") != [source_root]
+                        or project_identity(before_state) != packet.get("before_project_id")
+                        or project_identity(state) != packet.get("before_project_id")
+                        or state.get("project_roots") != [source_root]
+                        or has_modal_or_chooser(state)):
+                    raise CharacterRejected("Reconcile requires the recorded pre-submit Save As stage and the same unobstructed source project")
+                first_fingerprint = state.get("fingerprint")
+                fresh = self.bridge.call("inspect", cancelled=cancelled)
+                fresh_state = fresh.get("state", {})
+                if (not isinstance(first_fingerprint, str) or not first_fingerprint
+                        or fresh_state.get("fingerprint") != first_fingerprint
+                        or project_identity(fresh_state) != packet.get("before_project_id")
+                        or fresh_state.get("project_roots") != [source_root]
+                        or (fresh_state.get("pid"), fresh_state.get("launch_time"))
+                        != (original.get("pid"), original.get("launch_time"))
+                        or has_modal_or_chooser(fresh_state) or destination.exists()):
+                    raise CharacterRejected("Reconcile requires a stable no-chooser observation and absent copy destination")
+                result = {"status": "unsubmitted_copy_reconciled",
+                          "completion": "recorded_pre_submit_stage_closed_without_submission",
+                          "expected_output_exists": False, "native": fresh}
+                packet.update(state="resolved", resolution="reconcile_unsubmitted_copy",
+                              reconciliation_basis="recorded_pre_submit_directory_request",
+                              reconciliation_native=fresh, result=result)
+                receipts = self.directory / "operations"
+                receipts.mkdir(exist_ok=True, mode=0o700)
+                receipt = receipts / (operation_id + ".json")
+                if receipt.exists():
+                    raise CharacterRejected("A reconciliation receipt already exists for this operation")
+                try:
+                    write_json(receipt, packet)
+                    write_json(self.directory / "lease.json", lease)
+                    (self.directory / "operation.json").unlink()
+                except OSError as exc:
+                    raise CharacterUnknown("Unsubmitted stage was observed but its reconciliation journal was not committed") from exc
+                return {**result, "operation_id": operation_id, "retry_safe": False}
             if action == "continue_export":
                 intent = packet.get("intent", {})
                 target = self.path(intent.get("directory"))
@@ -838,17 +989,46 @@ class CharacterAnimator:
             else:
                 destination = self.path(packet["intent"]["directory"])
             if action == "continue_copy":
-                source_root = packet["parameters"]["project_root"]
+                source, _, destination = self._initial_copy_paths(packet)
+                source_root = str(source)
                 focus = state.get("focused_window") or {}
                 if (project_identity(state) != packet["before_project_id"]
                         or state.get("project_roots") != [source_root]
                         or state.get("authentication_or_permission_prompt") is True
-                        or destination.exists()
-                        or not ((focus.get("identifier") == "save-panel"
-                                 and focus.get("title") == "Save Project As")
-                                or (focus.get("identifier") == "GoToWindow"
-                                    and focus.get("role") == "AXSheet"))):
+                        or destination.exists()):
                     raise CharacterRejected("Continue requires the original project and its exact unsubmitted Save As chooser")
+                is_save_panel = (focus.get("identifier") == "save-panel"
+                                 and focus.get("title") == "Save Project As")
+                is_go_to = (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")
+                if not (is_save_panel or is_go_to):
+                    main_window = (focus.get("role") == "AXLayoutArea"
+                                   and focus.get("title") == "Character Animator")
+                    modal = (focus.get("modal") is True
+                             or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                    for window in state.get("windows", []) if isinstance(window, dict)))
+                    if (state.get("frontmost") is not False or not main_window or modal):
+                        raise CharacterRejected("Continue requires the exact existing Save As chooser or a background main window for guarded activation")
+                    focused = self.bridge.call("focus", {"kind": "save_as", "project_root": source_root},
+                                               expected=state, cancelled=cancelled)
+                    focused_state = focused.get("state", {})
+                    after_focus = focused_state.get("focused_window") or {}
+                    focused_panel = (after_focus.get("identifier") == "save-panel"
+                                     and after_focus.get("title") == "Save Project As")
+                    focused_go_to = (after_focus.get("identifier") == "GoToWindow"
+                                     and after_focus.get("role") == "AXSheet"
+                                     and any(window.get("identifier") == "save-panel"
+                                             and window.get("title") == "Save Project As"
+                                             for window in focused_state.get("windows", [])
+                                             if isinstance(window, dict)))
+                    if (project_identity(focused_state) != packet["before_project_id"]
+                            or focused_state.get("project_roots") != [source_root]
+                            or focused_state.get("authentication_or_permission_prompt") is True
+                            or focused_state.get("frontmost") is not True
+                            or (focused_state.get("pid"), focused_state.get("launch_time"))
+                            != (state.get("pid"), state.get("launch_time"))
+                            or not (focused_panel or focused_go_to)):
+                        raise CharacterRejected("Activation did not expose the exact same-process Save As chooser")
+                    observed, state, focus = focused, focused_state, after_focus
                 arguments = {"kind": "save_as", "directory": packet["intent"]["directory"],
                              "basename": packet["intent"]["name"], "project_root": source_root}
 
@@ -865,16 +1045,8 @@ class CharacterAnimator:
                                 or current_state.get("project_roots") != [source_root]
                                 or current_state.get("authentication_or_permission_prompt") is True):
                             raise CharacterRejected("Project, process or prompt changed while the native chooser settled")
-                        focused = current_state.get("focused_window") or {}
-                        if command == "chooser_destination":
-                            expected_focus = (focused.get("identifier") == "save-panel"
-                                              and focused.get("title") == "Save Project As")
-                        else:
-                            expected_focus = ((focused.get("identifier") == "GoToWindow"
-                                               and focused.get("role") == "AXSheet")
-                                              or (focused.get("identifier") == "save-panel"
-                                                  and focused.get("title") == "Save Project As"))
-                        if not expected_focus:
+                        if not self._chooser_visible(current_state, "save_as",
+                                                     allow_go_to=command == "chooser_continue_directory"):
                             raise CharacterRejected("The exact owned Save As chooser is no longer focused")
                         fingerprint = current_state.get("fingerprint")
                         if fingerprint and fingerprint == previous:

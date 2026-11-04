@@ -26,6 +26,13 @@ struct NativeFailure: Error {
     let code: String
     let message: String
 }
+struct ProjectHandleFailure: Error {
+    let code: String
+    let message: String
+    let terminationStatus: Int32?
+    let outputBytes: Int
+    let timedOut: Bool
+}
 func fail(_ code: String, _ message: String) throws -> Never { throw NativeFailure(code: code, message: message) }
 func sha(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 func canonical(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed]) }
@@ -127,12 +134,41 @@ final class Observation {
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         process.arguments = ["-n", "-P", "-a", "-p", String(pid), "-Fn"]
         process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
-        try process.run()
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { if process.isRunning { process.terminate() } }
-        let output = try pipe.fileHandleForReading.read(upToCount: 2 * 1024 * 1024 + 1) ?? Data()
-        if output.count > 2 * 1024 * 1024 { if process.isRunning { process.terminate() }; try fail("INSPECTION_LIMIT", "Project handle inspection exceeded its output limit") }
+        do { try process.run() }
+        catch { throw ProjectHandleFailure(code: "launch_failed", message: "lsof could not start",
+                                           terminationStatus: nil, outputBytes: 0, timedOut: false) }
+        let timeoutLock = NSLock()
+        var didTimeout = false
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
+            if process.isRunning {
+                timeoutLock.lock(); didTimeout = true; timeoutLock.unlock()
+                process.terminate()
+            }
+        }
+        let output: Data
+        do { output = try pipe.fileHandleForReading.read(upToCount: 2 * 1024 * 1024 + 1) ?? Data() }
+        catch {
+            if process.isRunning { process.terminate() }
+            timeoutLock.lock(); let timedOut = didTimeout; timeoutLock.unlock()
+            throw ProjectHandleFailure(code: "read_failed", message: "lsof output could not be read",
+                                       terminationStatus: nil, outputBytes: 0,
+                                       timedOut: timedOut)
+        }
+        if output.count > 2 * 1024 * 1024 {
+            if process.isRunning { process.terminate() }
+            timeoutLock.lock(); let timedOut = didTimeout; timeoutLock.unlock()
+            throw ProjectHandleFailure(code: "output_limit", message: "lsof output exceeded its limit",
+                                       terminationStatus: nil, outputBytes: output.count,
+                                       timedOut: timedOut)
+        }
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { try fail("PROJECT_HANDLES_UNAVAILABLE", "Native project file handles could not be inspected") }
+        timeoutLock.lock(); let timedOut = didTimeout; timeoutLock.unlock()
+        guard process.terminationStatus == 0 else {
+            throw ProjectHandleFailure(code: timedOut ? "timed_out" : "nonzero_exit",
+                                       message: timedOut ? "lsof exceeded its inspection time limit" : "lsof exited unsuccessfully",
+                                       terminationStatus: process.terminationStatus, outputBytes: output.count,
+                                       timedOut: timedOut)
+        }
         return Array(Set(String(decoding: output, as: UTF8.self).split(separator: "\n").compactMap { line -> String? in
             guard line.first == "n" else { return nil }
             let path = String(line.dropFirst())
@@ -287,7 +323,21 @@ final class Observation {
                     return path.hasSuffix(".chproj") ? URL(fileURLWithPath: path).deletingLastPathComponent().path : nil
                 })).sorted()
                 state["project_documents"] = handles.filter { $0.hasSuffix(".chproj") }
-            } catch { state["project_roots"] = []; state["project_handle_error"] = "unavailable" }
+            } catch {
+                state["project_roots"] = []
+                state["project_handle_error"] = "unavailable"
+                if let failure = error as? ProjectHandleFailure {
+                    var details: [String: Any] = ["code": failure.code, "message": failure.message,
+                                                   "output_bytes": failure.outputBytes,
+                                                   "timed_out": failure.timedOut]
+                    if let status = failure.terminationStatus { details["termination_status"] = status }
+                    state["project_handle_failure"] = details
+                } else if let failure = error as? NativeFailure {
+                    state["project_handle_failure"] = ["code": failure.code, "message": failure.message]
+                } else {
+                    state["project_handle_failure"] = ["code": "inspection_failed", "message": "Project handle inspection failed"]
+                }
+            }
             let documents = observation.nodes.compactMap { $0.1["document_url"] as? String }
             state["document_urls"] = Array(Set(documents)).sorted()
             state["identity_limitations"] = documents.isEmpty ? ["No native AXDocument URL is exposed; window titles are not file paths", "Project roots are observed open-file-handle evidence, not a native scene identifier"] : []
@@ -332,6 +382,19 @@ final class Observation {
             guard text(focused, "AXTitle") == titles[kind] else { try fail("CHOOSER_MISMATCH", "Chooser title differs from the requested domain operation") }
         }
         return focused
+    }
+    func typedChooserIsFocused(_ observation: Observation, kind: String) -> Bool {
+        let titles = ["save_as": "Save Project As", "import": "Import",
+                      "export_png_wav": "Export Scene", "open_project": "Open Project"]
+        guard let title = titles[kind] else { return false }
+        let panelID = kind == "import" || kind == "open_project" ? "open-panel" : "save-panel"
+        guard let focused = observation.focusedWindow else { return false }
+        if text(focused, "AXIdentifier") == panelID && text(focused, "AXTitle") == title
+            && bool(focused, "AXModal") == true { return true }
+        return text(focused, "AXIdentifier") == "GoToWindow" && text(focused, "AXRole") == "AXSheet"
+            && observation.nodes.filter {
+                text($0.0, "AXIdentifier") == panelID && text($0.0, "AXTitle") == title
+            }.count == 1
     }
     func node(_ observation: Observation, identifier: String, role: String? = nil) throws -> AXUIElement {
         let candidates = observation.nodes.filter { text($0.0, "AXIdentifier") == identifier && (role == nil || text($0.0, "AXRole") == role) }
@@ -472,7 +535,8 @@ final class Observation {
             try fail("FOCUS_CHANGED", "Native foreground PID does not match Character Animator after Dock activation (workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), accessibility=\(livePID), target=\(app.processIdentifier), app_frontmost=\(bool(root, "AXFrontmost") ?? false))")
         }
     }
-    func chooserDestination(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+    func chooserDestination(_ initialObservation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+        var observation = initialObservation
         phase = "chooser_preflight"
         guard let kind = parameters["kind"] as? String, ["save_as", "import", "export_png_wav", "open_project"].contains(kind),
               let directory = parameters["directory"] as? String, directory.hasPrefix("/"),
@@ -491,7 +555,27 @@ final class Observation {
             guard FileManager.default.fileExists(atPath: destination.path) else { try fail("INPUT_NOT_FOUND", "Requested import/project input does not exist") }
         }
         try ownedRoot(parameters, observation)
-        let originalPanel = try panel(observation, kind: kind)
+        guard let app = observation.application else { try fail("APPLICATION_UNAVAILABLE", "Character Animator is not running") }
+        let originalPID = app.processIdentifier
+        let originalLaunchTime = observation.state["launch_time"] as? String
+        try await focusApplication(observation)
+        let activated = try observe()
+        try ownedRoot(parameters, activated)
+        guard activated.application?.processIdentifier == originalPID,
+              (activated.state["launch_time"] as? String) == originalLaunchTime,
+              activated.state["authentication_or_permission_prompt"] as? Bool != true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,
+              typedChooserIsFocused(activated, kind: kind) else {
+            try fail("FOCUS_CHANGED", "Activation did not expose the same-process requested chooser without a prompt")
+        }
+        let originalPanel: AXUIElement
+        if let focused = activated.focusedWindow,
+           text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet" {
+            originalPanel = focused
+        } else {
+            originalPanel = try panel(activated, kind: kind)
+        }
+        observation = activated
         if kind == "import", observation.nodes.contains(where: {
             $0.1["identifier"] as? String == "where popup"
                 && $0.1["value"] as? String == directoryURL.lastPathComponent
@@ -502,9 +586,7 @@ final class Observation {
         }) {
             return try await continueDirectoryEntry(observation, parameters: parameters)
         }
-        guard let app = observation.application else { try fail("APPLICATION_UNAVAILABLE", "Character Animator is not running") }
         phase = "chooser_activation"
-        try await focusApplication(observation)
         phase = "chooser_raise"
         try perform(originalPanel, action: "AXRaise")
         var focusSettable: DarwinBoolean = false
@@ -1009,9 +1091,18 @@ final class Observation {
         if operation == "focus" {
             try ownedRoot(parameters, observation)
             guard let kind = parameters["kind"] as? String else { try fail("INVALID_ARGUMENT", "Focus requires the expected native chooser kind") }
-            _ = try panel(observation, kind: kind)
+            guard ["save_as", "import", "export_png_wav", "open_project"].contains(kind) else {
+                try fail("INVALID_ARGUMENT", "Focus requires an exact supported chooser kind")
+            }
             try await focusApplication(observation)
-            let after = try observe(); try ownedRoot(parameters, after)
+            let after = try observe()
+            try ownedRoot(parameters, after)
+            guard (after.state["pid"] as? Int) == (observation.state["pid"] as? Int),
+                  (after.state["launch_time"] as? String) == (observation.state["launch_time"] as? String),
+                  after.state["authentication_or_permission_prompt"] as? Bool != true,
+                  typedChooserIsFocused(after, kind: kind) else {
+                try fail("CHOOSER_MISMATCH", "After activation, the same process must expose the requested chooser without a prompt")
+            }
             return ["state": after.state, "result": ["status": "native_application_focused", "completion": "observed", "ui_only": true]]
         } else if operation == "project_select" {
             return try await projectSelect(parameters, observation: observation)

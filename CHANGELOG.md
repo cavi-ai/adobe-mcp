@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Character Animator can resume an expired first-copy lease and reconcile a recorded unsubmitted Save As stage.
+
 ## 0.1.0 - 2026-11-04
 
 ### Added

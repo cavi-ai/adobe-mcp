@@ -78,6 +78,11 @@ Every tool error returns one structured result (`code`, `outcome`, `next_action`
 application may have changed: inspect it, or resolve the recorded operation with the
 server's `operation_control` tool, before trying again.
 
+Character Animator can resume an expired lease for the exact recorded first Save As
+copy. If that recorded pre-submit chooser has since closed, `reconcile_unsubmitted_copy`
+archives the unsubmitted stage only after stable checks confirm the original project,
+process, and absent destination; it does not claim the user cancelled the operation.
+
 ## Development
 
 ```sh

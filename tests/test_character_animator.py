@@ -33,21 +33,42 @@ class NativeFixture:
         self.fail_import_focus_dispatch = False
         self.fail_import_generic_no_menu = False
         self.fail_export_submit = False
+        self.hide_chooser_after_command = False
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
         self.calls.append(operation)
         if expected is not None and expected["fingerprint"] != self.state["fingerprint"]:
             raise CharacterRejected("Stale observation", "STALE_STATE")
+        if operation == "focus":
+            self.state.update(frontmost=True, fingerprint="focused-save-as",
+                              focused_window={"identifier": "save-panel", "title": "Save Project As",
+                                               "modal": True},
+                              windows=[{"identifier": "save-panel", "title": "Save Project As", "modal": True}])
+            return {"version": 1, "ok": True, "operation": operation,
+                    "state": copy.deepcopy(self.state),
+                    "result": {"status": "native_application_focused", "completion": "observed", "ui_only": True}}
         if operation == "save_as":
             self.state["fingerprint"] = "chooser"
             self.state["focused_window"] = {"identifier": "save-panel",
                                              "title": "Save Project As"}
             self.state["windows"] = [{"modal": True, "identifier": "save-panel",
                                        "title": "Save Project As"}]
+            if self.hide_chooser_after_command:
+                self.state.update(frontmost=False, fingerprint="background-main",
+                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                  "title": "Character Animator"},
+                                  windows=[{"identifier": "main-window", "role": "AXWindow",
+                                            "title": "Character Animator", "modal": False}])
         if operation == "chooser_destination":
             self.state["fingerprint"] = "go-to"
             self.state["focused_window"] = {"identifier": "GoToWindow", "role": "AXSheet"}
-            self.state["windows"] = [{"identifier": "GoToWindow", "role": "AXSheet"}]
+            kind = (parameters or {}).get("kind")
+            panel_id, title = (("open-panel", "Import") if kind == "import" else
+                               ("save-panel", "Export Scene") if kind == "export_png_wav" else
+                               ("open-panel", "Open Project") if kind == "open_project" else
+                               ("save-panel", "Save Project As"))
+            self.state["windows"] = [{"identifier": panel_id, "title": title, "modal": True},
+                                      {"identifier": "GoToWindow", "role": "AXSheet"}]
         if operation == "chooser_continue_directory":
             if self.fail:
                 raise CharacterUnknown("Fixture timeout")
@@ -158,6 +179,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.root = Path(self.folder.name)
         (self.root / "workspace").mkdir()
         (self.root / "workspace/copies").mkdir()
+        (self.root / "original").mkdir()
         self.native = NativeFixture(self.root)
         self.client = CharacterAnimator(self.root / "workspace", self.root / "private", self.native)
 
@@ -171,6 +193,22 @@ class CharacterOwnershipTests(unittest.TestCase):
         with self.assertRaises(CharacterUnknown):
             self.client.save_copy("copies", "Recovery", lease["lease_id"])
         packet = self.client.inspect()["pending_operation"]
+        return lease, packet
+
+    def pending_closed_initial_save_as(self):
+        source = self.root / "workspace/original"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        packet["last_command"] = "chooser_destination"
+        packet["native"]["operation"] = "chooser_destination"
+        packet["native"]["result"]["status"] = "native_chooser_directory_requested"
+        write_json(self.client.directory / "operation.json", packet)
+        self.native.state["focused_window"] = {"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Character Animator"}
+        self.native.state["windows"] = [{"identifier": "main-window", "role": "AXWindow",
+                                          "title": "Character Animator", "modal": False}]
+        self.native.state["fingerprint"] = "closed-save-as"
         return lease, packet
 
     def pending_unknown_import(self):
@@ -213,6 +251,26 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.calls.count("save_as"), 1)
         self.assertEqual(self.native.calls.count("chooser_continue_directory"), 2)
         self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_copy_and_resume_activate_background_window_then_recheck_exact_chooser(self):
+        self.native.hide_chooser_after_command = True
+        lease = self.claim()
+        copied = self.client.save_copy("copies", "Owned", lease["lease_id"])
+        self.assertEqual(copied["status"], "owned_copy")
+        self.assertEqual(self.native.calls.count("focus"), 1)
+        self.client.session("release", lease["owner"], copied["project_id"], lease["lease_id"])
+
+        lease, packet = self.pending_save_as()
+        self.native.fail = False
+        self.native.state.update(frontmost=False, fingerprint="background-resume",
+                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Character Animator"},
+                                 windows=[{"identifier": "main-window", "role": "AXWindow",
+                                           "title": "Character Animator", "modal": False}])
+        result = self.client.operation_control("continue_copy", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(result["status"], "owned_copy")
+        self.assertEqual(self.native.calls.count("focus"), 3)
+        self.assertEqual(self.native.calls.count("save_as"), 2)
 
     def test_failed_save_after_navigation_retains_pending_and_blocks_replay(self):
         self.native.directory_transition = True
@@ -673,6 +731,95 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertGreater(renewed["expires_at"], time.time())
         self.assertEqual(self.client.read("operation.json"), original_packet)
 
+    def test_resume_renews_expired_lease_for_initial_save_as_without_dispatch(self):
+        source = self.root / "workspace/original"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        old_lease = self.client.read("lease.json")
+        self.assertIsNone(old_lease["owned_root"])
+        old_lease["expires_at"] = time.time() - 1
+        write_json(self.client.directory / "lease.json", old_lease)
+        native_calls = list(self.native.calls)
+
+        resumed = self.client.session("resume", lease["owner"], packet["before_project_id"],
+                                      lease["lease_id"], 300, pending_operation_id=packet["operation_id"])
+
+        self.assertEqual(resumed["state"], "owned")
+        self.assertNotEqual(resumed["lease_id"], lease["lease_id"])
+        self.assertEqual(resumed["pending_operation"], packet)
+        self.assertEqual(self.native.calls.count("save_as"), native_calls.count("save_as"))
+        self.assertEqual(self.client.read("operation.json"), packet)
+        self.assertIsNone(self.client.read("lease.json")["owned_root"])
+
+    def test_resume_rejects_mismatched_initial_copy_or_process(self):
+        source = self.root / "workspace/original"
+        source.mkdir()
+        self.native.state["project_roots"] = [str(source.resolve())]
+        lease, packet = self.pending_save_as()
+        old_lease = self.client.read("lease.json")
+        old_lease["expires_at"] = time.time() - 1
+        write_json(self.client.directory / "lease.json", old_lease)
+        for edit, change_pid in (
+                (lambda damaged: damaged.update(operation="import"), False),
+                (lambda damaged: damaged["intent"].update(destination=str(self.root / "workspace/copies/Other")), False),
+                (lambda damaged: damaged["parameters"].update(project_root=str(self.root / "workspace/other")), False),
+                (lambda damaged: None, True)):
+            damaged = copy.deepcopy(packet)
+            edit(damaged)
+            write_json(self.client.directory / "operation.json", damaged)
+            original_state = copy.deepcopy(self.native.state)
+            if change_pid:
+                self.native.state["pid"] += 1
+            with self.assertRaises(CharacterRejected):
+                self.client.session("resume", lease["owner"], packet["before_project_id"],
+                                    lease["lease_id"], 300, pending_operation_id=packet["operation_id"])
+            self.assertEqual(self.client.read("lease.json"), old_lease)
+            self.assertEqual(self.client.read("operation.json"), damaged)
+            self.native.state = original_state
+
+    def test_reconcile_closed_pre_submit_save_as_preserves_receipt_without_cancellation(self):
+        lease, packet = self.pending_closed_initial_save_as()
+        native_calls = list(self.native.calls)
+        result = self.client.operation_control("reconcile_unsubmitted_copy", packet["operation_id"],
+                                               lease["lease_id"])
+        self.assertEqual(result["status"], "unsubmitted_copy_reconciled")
+        self.assertEqual(result["completion"], "recorded_pre_submit_stage_closed_without_submission")
+        self.assertEqual(self.native.calls, native_calls + ["inspect", "inspect"])
+        self.assertIsNone(self.client.inspect()["pending_operation"])
+        receipt = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(receipt["resolution"], "reconcile_unsubmitted_copy")
+        self.assertEqual(receipt["native"]["result"]["status"], "native_chooser_directory_requested")
+        self.assertIsNone(self.client.read("lease.json")["owned_root"])
+
+    def test_reconcile_rejects_submission_destination_process_and_modal(self):
+        lease, packet = self.pending_closed_initial_save_as()
+        native_state = copy.deepcopy(self.native.state)
+        original_lease = self.client.read("lease.json")
+        destination = Path(packet["intent"]["destination"])
+        cases = (
+            (lambda damaged, state: damaged["native"]["result"].update(status="native_chooser_submitted"), False),
+            (lambda damaged, state: damaged.update(last_command="chooser_continue_directory"), False),
+            (lambda damaged, state: state.update(pid=state["pid"] + 1), False),
+            (lambda damaged, state: state.update(focused_window={"identifier": "GoToWindow", "role": "AXSheet"}), False),
+            (lambda damaged, state: state.update(windows=[{"modal": True}]), False),
+            (lambda damaged, state: state.update(authentication_or_permission_prompt=True), False),
+            (lambda damaged, state: None, True))
+        for damage, create_destination in cases:
+            damaged, state = copy.deepcopy(packet), copy.deepcopy(native_state)
+            damage(damaged, state)
+            write_json(self.client.directory / "operation.json", damaged)
+            self.native.state = state
+            if create_destination:
+                destination.mkdir()
+            with self.assertRaises(CharacterRejected):
+                self.client.operation_control("reconcile_unsubmitted_copy", packet["operation_id"], lease["lease_id"])
+            self.assertEqual(self.client.read("lease.json"), original_lease)
+            self.assertEqual(self.client.read("operation.json"), damaged)
+            if create_destination:
+                destination.rmdir()
+        self.native.state = native_state
+
     def test_resume_rejects_active_wrong_owner_operation_or_project_without_changes(self):
         lease, packet = self.pending_unknown_import()
         lease_path = self.client.directory / "lease.json"
@@ -765,6 +912,8 @@ class CharacterProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("pending_operation_id", tools["session_control"].input_schema["properties"])
                 self.assertIn("continue_copy", tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("continue_export", tools["operation_control"].input_schema["properties"]["action"]["enum"])
+                self.assertIn("reconcile_unsubmitted_copy",
+                              tools["operation_control"].input_schema["properties"]["action"]["enum"])
                 self.assertIn("import_media", tools)
                 self.assertIn("scene_action", tools)
                 self.assertIn("scene_export", tools)
