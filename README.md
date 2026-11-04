@@ -78,6 +78,9 @@ Every tool error returns one structured result (`code`, `outcome`, `next_action`
 application may have changed: inspect it, or resolve the recorded operation with the
 server's `operation_control` tool, before trying again.
 
+When a pending Character Animator chooser is behind the app, the server activates the
+app and rechecks the recorded process, project, and exact chooser before continuing.
+
 ## Development
 
 ```sh

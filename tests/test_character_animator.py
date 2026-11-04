@@ -33,21 +33,46 @@ class NativeFixture:
         self.fail_import_focus_dispatch = False
         self.fail_import_generic_no_menu = False
         self.fail_export_submit = False
+        self.hide_chooser_after_command = False
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
         self.calls.append(operation)
         if expected is not None and expected["fingerprint"] != self.state["fingerprint"]:
             raise CharacterRejected("Stale observation", "STALE_STATE")
+        if operation == "focus":
+            kind = (parameters or {}).get("kind")
+            panel_id, title = (("open-panel", "Import") if kind == "import" else
+                               ("save-panel", "Export Scene") if kind == "export_png_wav" else
+                               ("open-panel", "Open Project") if kind == "open_project" else
+                               ("save-panel", "Save Project As"))
+            self.state.update(frontmost=True, fingerprint="focused-save-as",
+                              focused_window={"identifier": panel_id, "title": title, "modal": True},
+                              windows=[{"identifier": panel_id, "title": title, "modal": True}])
+            return {"version": 1, "ok": True, "operation": operation,
+                    "state": copy.deepcopy(self.state),
+                    "result": {"status": "native_application_focused", "completion": "observed", "ui_only": True}}
         if operation == "save_as":
             self.state["fingerprint"] = "chooser"
             self.state["focused_window"] = {"identifier": "save-panel",
                                              "title": "Save Project As"}
             self.state["windows"] = [{"modal": True, "identifier": "save-panel",
                                        "title": "Save Project As"}]
+            if self.hide_chooser_after_command:
+                self.state.update(frontmost=False, fingerprint="background-main",
+                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                  "title": "Character Animator"},
+                                  windows=[{"identifier": "main-window", "role": "AXWindow",
+                                            "title": "Character Animator", "modal": False}])
         if operation == "chooser_destination":
             self.state["fingerprint"] = "go-to"
             self.state["focused_window"] = {"identifier": "GoToWindow", "role": "AXSheet"}
-            self.state["windows"] = [{"identifier": "GoToWindow", "role": "AXSheet"}]
+            kind = (parameters or {}).get("kind")
+            panel_id, title = (("open-panel", "Import") if kind == "import" else
+                               ("save-panel", "Export Scene") if kind == "export_png_wav" else
+                               ("open-panel", "Open Project") if kind == "open_project" else
+                               ("save-panel", "Save Project As"))
+            self.state["windows"] = [{"identifier": panel_id, "title": title, "modal": True},
+                                      {"identifier": "GoToWindow", "role": "AXSheet"}]
         if operation == "chooser_continue_directory":
             if self.fail:
                 raise CharacterUnknown("Fixture timeout")
@@ -118,6 +143,12 @@ class NativeFixture:
             self.state["fingerprint"] = "import-panel"
             self.state["focused_window"] = {"identifier": "open-panel", "title": "Import", "modal": True}
             self.state["windows"] = [{"modal": True, "identifier": "open-panel", "title": "Import"}]
+            if self.hide_chooser_after_command:
+                self.state.update(frontmost=False, fingerprint="background-main",
+                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                  "title": "Character Animator"},
+                                  windows=[{"identifier": "main-window", "role": "AXWindow",
+                                            "title": "Character Animator", "modal": False}])
             if self.fail_import_before_envelope:
                 raise CharacterUnknown("Fixture timeout before native response envelope")
         if operation == "chooser_destination" and parameters.get("kind") == "import":
@@ -139,6 +170,12 @@ class NativeFixture:
             self.state["fingerprint"] = "export-panel"
             self.state["focused_window"] = {"identifier": "save-panel", "title": "Export Scene", "modal": True}
             self.state["windows"] = [{"identifier": "save-panel", "title": "Export Scene", "modal": True}]
+            if self.hide_chooser_after_command:
+                self.state.update(frontmost=False, fingerprint="background-main",
+                                  focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                  "title": "Character Animator"},
+                                  windows=[{"identifier": "main-window", "role": "AXWindow",
+                                            "title": "Character Animator", "modal": False}])
             return {"version": 1, "ok": True, "operation": operation,
                     "state": copy.deepcopy(self.state),
                     "result": {"status": "native_command_dispatched", "completion": "unverified"}}
@@ -158,6 +195,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.root = Path(self.folder.name)
         (self.root / "workspace").mkdir()
         (self.root / "workspace/copies").mkdir()
+        (self.root / "original").mkdir()
         self.native = NativeFixture(self.root)
         self.client = CharacterAnimator(self.root / "workspace", self.root / "private", self.native)
 
@@ -231,6 +269,26 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.calls.count("chooser_continue_directory"), 2)
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
+    def test_copy_and_resume_activate_background_window_then_recheck_exact_chooser(self):
+        self.native.hide_chooser_after_command = True
+        lease = self.claim()
+        copied = self.client.save_copy("copies", "Owned", lease["lease_id"])
+        self.assertEqual(copied["status"], "owned_copy")
+        self.assertEqual(self.native.calls.count("focus"), 1)
+        self.client.session("release", lease["owner"], copied["project_id"], lease["lease_id"])
+
+        lease, packet = self.pending_save_as()
+        self.native.fail = False
+        self.native.state.update(frontmost=False, fingerprint="background-resume",
+                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Character Animator"},
+                                 windows=[{"identifier": "main-window", "role": "AXWindow",
+                                           "title": "Character Animator", "modal": False}])
+        result = self.client.operation_control("continue_copy", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(result["status"], "owned_copy")
+        self.assertEqual(self.native.calls.count("focus"), 3)
+        self.assertEqual(self.native.calls.count("save_as"), 2)
+
     def test_failed_save_after_navigation_retains_pending_and_blocks_replay(self):
         self.native.directory_transition = True
         self.native.fail_submit = True
@@ -297,6 +355,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.client.read("lease.json")["owned_root"], result["project_root"])
 
     def test_import_media_stages_hash_pinned_psd_under_the_owned_project_lease(self):
+        self.native.hide_chooser_after_command = True
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         source = self.root / "workspace/puppet.psd"
@@ -382,6 +441,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
     def test_scene_export_submits_exact_native_chooser_with_new_directory(self):
+        self.native.hide_chooser_after_command = True
         lease = self.claim()
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         (self.root / "workspace/exports").mkdir()
@@ -414,6 +474,11 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(packet["operation"], "export_png_wav")
         operation_id = packet["operation_id"]
         self.native.fail_export_submit = False
+        self.native.state.update(frontmost=False, fingerprint="background-resume",
+                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Character Animator"},
+                                 windows=[{"identifier": "main-window", "role": "AXWindow",
+                                           "title": "Character Animator", "modal": False}])
 
         result = self.client.operation_control("continue_export", operation_id, lease["lease_id"])
 
@@ -512,6 +577,11 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.calls.count("import"), 1)
         operation_id = pending["operation_id"]
         self.native.import_directory_pending = False
+        self.native.state.update(frontmost=False, fingerprint="background-resume",
+                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                                                 "title": "Character Animator"},
+                                 windows=[{"identifier": "main-window", "role": "AXWindow",
+                                           "title": "Character Animator", "modal": False}])
         resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
         self.assertEqual(resumed["status"], "native_import_submitted")
         self.assertEqual(self.native.calls.count("import"), 1)
