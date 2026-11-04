@@ -80,7 +80,7 @@ class NativeBridge:
                    "application": str(path)}
         if expected is not None:
             expected_keys = ["pid", "launch_time", "fingerprint"]
-            if operation == "focus":
+            if operation in ("focus", "continue_chooser"):
                 expected_keys.extend(("bundle_id", "application", "project_roots"))
             request["expected"] = {key: expected[key] for key in expected_keys}
         binary = self.executable()

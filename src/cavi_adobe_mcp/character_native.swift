@@ -908,7 +908,6 @@ final class Observation {
               let kind = parameters["kind"] as? String,
               ["import", "export_png_wav"].contains(kind),
               let app = initial.application,
-              typedChooserIsObserved(initial, kind: kind),
               hasOnlyExpectedChooserModal(initial, kind: kind),
               initial.state["authentication_or_permission_prompt"] as? Bool != true else {
             try fail("CHOOSER_MISMATCH", "Continue requires the exact existing typed chooser without an unrelated modal or prompt")
@@ -1173,7 +1172,10 @@ final class Observation {
                 return rect.contains(center)
             }
             guard topmostAtSheet?[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier) else {
-                try fail("FOCUS_CHANGED", "The focused Go To sheet is not the topmost visible Character Animator window")
+                let blockingPID = topmostAtSheet?[kCGWindowOwnerPID as String] as? Int
+                let blockingOwner = (topmostAtSheet?[kCGWindowOwnerName as String] as? String)
+                    .map { String($0.prefix(128)) } ?? "unknown"
+                try fail("FOCUS_CHANGED", "The focused Go To sheet is not topmost (expected_pid=\(app.processIdentifier), blocking_pid=\(blockingPID.map(String.init) ?? "none"), blocking_owner=\(blockingOwner))")
             }
             dispatched = true
             guard AXUIElementSetAttributeValue(activeField, "AXFocused" as CFString, kCFBooleanTrue) == .success,
@@ -1481,7 +1483,7 @@ final class Observation {
             return ["state": observation.state, "result": try await capture(observation, parameters: parameters)]
         }
         phase = "precondition"
-        if operation == "focus" {
+        if operation == "focus" || operation == "continue_chooser" {
             try expectedFocusIdentity(request, observation: observation)
         } else {
             try expected(request, observation: observation)

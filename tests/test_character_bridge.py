@@ -67,6 +67,40 @@ class CharacterBridgeRequestTests(unittest.TestCase):
         self.assertEqual(request["expected"], {key: expected[key] for key in (
             "pid", "launch_time", "fingerprint", "bundle_id", "application", "project_roots")})
 
+    def test_continue_chooser_request_carries_identity_for_atomic_activation(self):
+        expected = {
+            "pid": 58131,
+            "launch_time": 1793825743.48212,
+            "fingerprint": "background-chooser-fingerprint",
+            "bundle_id": "com.adobe.Character-Animator.application",
+            "application": "/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            "project_roots": ["/workspace/owned-project"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            helper = Path(directory) / "native-helper"
+            helper.write_bytes(b"fixture helper")
+            process_holder = []
+
+            def popen(_args, *, stdout, **_kwargs):
+                process = _CompletedProcess(stdout, "continue_chooser")
+                process_holder.append(process)
+                stdout.write(json.dumps({"version": 1, "operation": "continue_chooser", "ok": True,
+                                         "state": {}, "result": {}}).encode())
+                stdout.flush()
+                return process
+
+            with (patch("cavi_adobe_mcp.character_bridge.application",
+                        return_value=(Path(expected["application"]), {})),
+                  patch.object(NativeBridge, "executable", return_value=helper),
+                  patch("cavi_adobe_mcp.character_bridge.subprocess.Popen", side_effect=popen)):
+                NativeBridge(directory).call(
+                    "continue_chooser", {"kind": "import", "operation_id": "a" * 32},
+                    expected=expected)
+
+        request = json.loads(process_holder[0].stdin.data)
+        self.assertEqual(request["expected"], {key: expected[key] for key in (
+            "pid", "launch_time", "fingerprint", "bundle_id", "application", "project_roots")})
+
     def test_continue_chooser_preserves_structured_submission_context(self):
         response = {"version": 1, "operation": "continue_chooser", "ok": False,
                     "error": {"code": "OUTCOME_UNKNOWN", "outcome": "unknown",
