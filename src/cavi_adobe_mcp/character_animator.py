@@ -556,6 +556,9 @@ class CharacterAnimator:
             raise CharacterRejected("The same owned project without a prompt is required for chooser activation")
         parent_visible = any(window.get("identifier") == panel[0]
                              and window.get("title") == panel[1] for window in windows)
+        panel_visible = sum(1 for window in windows
+                            if window.get("identifier") == panel[0] and window.get("title") == panel[1]
+                            and window.get("modal") is True) == 1
 
         def expected_modal(window):
             if window.get("identifier") == panel[0] and window.get("title") == panel[1]:
@@ -570,7 +573,7 @@ class CharacterAnimator:
                 or (focused_modal and not expected_modal(focused))):
             raise CharacterRejected("An unrelated native modal blocks chooser activation")
 
-        chooser = self._chooser_visible(state, kind, allow_go_to)
+        chooser = self._chooser_visible(state, kind, allow_go_to) or panel_visible
         background_main = (state.get("frontmost") is False
                            and focused.get("role") == "AXLayoutArea"
                            and focused.get("title") == "Character Animator"
@@ -628,20 +631,28 @@ class CharacterAnimator:
                 state = before["native"]["state"]
                 focus = state.get("focused_window") or {}
                 windows = state.get("windows", [])
-                exact_open_panel = (focus.get("identifier") == "open-panel"
-                                    and focus.get("title") == "Import"
-                                    and focus.get("modal") is True)
                 import_parent = any(window.get("identifier") == "open-panel"
-                                    and window.get("title") == "Import" for window in windows)
+                                    and window.get("title") == "Import"
+                                    and window.get("modal") is True for window in windows)
+                background_main = (state.get("frontmost") is False
+                                   and focus.get("role") == "AXLayoutArea"
+                                   and focus.get("title") == "Character Animator")
+                exact_open_panel = ((focus.get("identifier") == "open-panel"
+                                     and focus.get("title") == "Import"
+                                     and focus.get("modal") is True)
+                                    or (background_main and import_parent))
                 exact_go_to = (focus.get("identifier") == "GoToWindow"
                                and focus.get("role") == "AXSheet" and import_parent)
                 looks_like_import_chooser = (focus.get("identifier") == "GoToWindow"
                                              or (focus.get("identifier") == "open-panel"
-                                                 and focus.get("title") == "Import"))
+                                                 and focus.get("title") == "Import")
+                                             or (background_main and import_parent))
                 modal_windows = [window for window in windows if window.get("modal") is True]
                 allowed_modals = all(
                     (window.get("identifier") == "open-panel" and window.get("title") == "Import")
-                    or window.get("identifier") == "GoToWindow" for window in modal_windows)
+                    or (window.get("identifier") == "GoToWindow"
+                        and window.get("role") == "AXSheet" and import_parent)
+                    for window in modal_windows)
                 if ((focus.get("modal") is True and not (exact_open_panel or exact_go_to))
                         or (modal_windows and (not allowed_modals or not (exact_open_panel or exact_go_to)))
                         or (looks_like_import_chooser and not (exact_open_panel or exact_go_to))):
@@ -1403,26 +1414,35 @@ class CharacterAnimator:
                                 or current_state.get("project_roots") != [source_root]
                                 or current_state.get("authentication_or_permission_prompt") is True):
                             raise CharacterRejected("Project, process or prompt changed while the import chooser settled")
+                        modal_windows = [window for window in current_state.get("windows", [])
+                                         if window.get("modal") is True or window.get("role") == "AXSheet"]
+                        import_parent_visible = any(
+                            window.get("identifier") == "open-panel" and window.get("title") == "Import"
+                            for window in current_state.get("windows", []))
+                        allowed_modal = all(
+                            (window.get("identifier") == "open-panel" and window.get("title") == "Import")
+                            or (window.get("identifier") == "GoToWindow"
+                                and window.get("role") == "AXSheet" and import_parent_visible)
+                            for window in modal_windows)
+                        if not allowed_modal:
+                            raise CharacterRejected("An unrelated modal replaced the exact Import chooser")
                         if current_state.get("frontmost") is not True:
                             previous = None
                             observed, state = current, current_state
                             time.sleep(.1)
                             continue
                         current_focus = current_state.get("focused_window") or {}
+                        go_to_visible = any(window.get("identifier") == "GoToWindow"
+                                            and window.get("role") == "AXSheet"
+                                            for window in modal_windows)
                         valid_focus = ((current_focus.get("identifier") == "open-panel"
                                         and current_focus.get("title") == "Import")
                                        or (current_focus.get("identifier") == "GoToWindow"
                                            and current_focus.get("role") == "AXSheet"
                                            and self._chooser_visible(current_state, "import", allow_go_to=True)))
+                        if go_to_visible and current_focus.get("identifier") != "GoToWindow":
+                            valid_focus = False
                         if not valid_focus:
-                            modal_windows = [window for window in current_state.get("windows", [])
-                                             if window.get("modal") is True or window.get("role") == "AXSheet"]
-                            allowed_modal = all(
-                                (window.get("identifier") == "open-panel" and window.get("title") == "Import")
-                                or (window.get("identifier") == "GoToWindow" and window.get("role") == "AXSheet")
-                                for window in modal_windows)
-                            if not allowed_modal:
-                                raise CharacterRejected("An unrelated modal replaced the exact Import chooser")
                             previous = None
                             observed, state = current, current_state
                             time.sleep(.1)

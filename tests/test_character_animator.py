@@ -656,10 +656,13 @@ class CharacterOwnershipTests(unittest.TestCase):
         source.write_bytes(b"fixture WAV bytes")
         self.native.state["fingerprint"] = "existing-import"
         self.native.state["frontmost"] = False
-        self.native.state["focused_window"] = {"identifier": "open-panel", "title": "Import",
-                                                "modal": True}
-        self.native.state["windows"] = [{"identifier": "open-panel", "title": "Import",
-                                         "modal": True}]
+        self.native.state["focused_window"] = {"identifier": "main-window", "role": "AXLayoutArea",
+                                                "title": "Character Animator"}
+        self.native.state["windows"] = [
+            {"identifier": "open-panel", "title": "Import", "modal": True},
+            {"identifier": "main-window", "role": "AXLayoutArea", "title": "Character Animator",
+             "modal": False},
+        ]
         calls_before = list(self.native.calls)
 
         result = self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
@@ -1000,6 +1003,30 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_continue_import_rejects_unparented_go_to_modal_under_import_focus(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.native.fail_import_before_envelope = False
+        self.native.import_inspect_states = [{
+            "frontmost": True,
+            "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+            "windows": [{"identifier": "GoToWindow", "role": "AXSheet", "modal": True}],
+        }]
+        chooser_calls = self.native.calls.count("chooser_destination")
+
+        with self.assertRaisesRegex(CharacterRejected, "unrelated modal"):
+            self.client.operation_control("continue_import", packet["operation_id"], lease["lease_id"])
+
+        pending = self.client.inspect()["pending_operation"]
+        self.assertEqual(pending["operation_id"], packet["operation_id"])
+        self.assertEqual(pending["state"], "unknown")
+        self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls)
 
     def test_import_recovery_keeps_unknown_when_owned_root_changed(self):
         lease = self.claim()
