@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1 - 2026-11-04
+
+### Added
+
+- Abandon an unknown operation only after the owned Character Animator process and all same-bundle instances exit.
+
 ## 0.3.0 - 2026-11-04
 
 ### Added

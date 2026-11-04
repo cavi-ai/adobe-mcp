@@ -1034,7 +1034,8 @@ class CharacterAnimator:
                           user_confirmed_cancelled=False):
         if action not in ("inspect", "verify_copy", "continue_copy", "continue_import", "continue_export",
                           "confirm_cancelled_import", "cancel_unsubmitted",
-                          "reconcile_unsubmitted_copy", "reconcile_copy_after_exit") or not IDENTIFIER.fullmatch(operation_id):
+                          "reconcile_unsubmitted_copy", "reconcile_copy_after_exit",
+                          "abandon_after_exit") or not IDENTIFIER.fullmatch(operation_id):
             raise CharacterRejected("Use a known operation ID and a supported operation control action")
         if action == "confirm_cancelled_import" and type(user_confirmed_cancelled) is not bool:
             raise CharacterRejected("user_confirmed_cancelled must be a strict boolean")
@@ -1051,6 +1052,8 @@ class CharacterAnimator:
             lease = self.read("lease.json")
             if action == "reconcile_copy_after_exit":
                 return self._reconcile_copy_after_exit(packet, lease, lease_id, observed, cancelled)
+            if action == "abandon_after_exit":
+                return self._abandon_after_exit(packet, lease, lease_id, observed, cancelled)
             required_operation = ("import" if action in ("continue_import", "confirm_cancelled_import")
                                   else "export_png_wav" if action == "continue_export" else "save_as")
             allowed_operations = ({"save_as", "export_png_wav"} if action == "cancel_unsubmitted"
@@ -1705,6 +1708,134 @@ class CharacterAnimator:
             except OSError as exc:
                 raise CharacterUnknown("Native outcome was observed but its resolution journal was not committed") from exc
             return {**result, "operation_id": operation_id, "retry_safe": False}
+
+    def _abandon_after_exit(self, packet, lease, lease_id, observed, cancelled):
+        parameters = packet.get("parameters")
+        before_native = packet.get("before_native")
+        before_state = before_native.get("state") if isinstance(before_native, dict) else None
+        original_process = (before_state.get("pid"), before_state.get("launch_time")) if isinstance(before_state, dict) else (None, None)
+        root_value = lease.get("owned_root") if isinstance(lease, dict) else None
+        if (not isinstance(lease, dict) or lease_id != lease.get("lease_id")
+                or not isinstance(lease.get("owner"), str) or not lease["owner"]
+                or lease.get("project_id") != packet.get("before_project_id")
+                or packet.get("state") != "unknown"
+                or packet.get("operation") not in ("import", "export_png_wav", "save_as")
+                or not isinstance(parameters, dict)
+                or not isinstance(root_value, str) or not root_value
+                or parameters.get("project_root") != root_value
+                or not isinstance(lease.get("owned_root_identity"), dict)
+                or not isinstance(before_state, dict)
+                or not isinstance(original_process[0], int) or isinstance(original_process[0], bool)
+                or original_process[0] <= 0
+                or not isinstance(original_process[1], (int, float)) or isinstance(original_process[1], bool)
+                or original_process[1] <= 0
+                or before_state.get("bundle_id") != CHARACTER_BUNDLE_ID
+                or not isinstance(before_state.get("application"), str)
+                or not Path(before_state["application"]).is_absolute()
+                or project_identity(before_state) != packet.get("before_project_id")
+                or before_state.get("project_roots") != [root_value]):
+            raise CharacterRejected("Abandon requires the matching unknown operation and first-hand owned project lease")
+        root = self.path(root_value)
+        if not root.is_dir():
+            raise CharacterRejected("The first-hand owned project root is unavailable")
+        root_identity = lease["owned_root_identity"]
+        if self._directory_identity(root) != root_identity:
+            raise CharacterRejected("The owned project root identity changed; the unknown operation remains retained")
+
+        recorded_native = packet.get("native")
+        if recorded_native is not None:
+            recorded_state = recorded_native.get("state") if isinstance(recorded_native, dict) else None
+            if (not isinstance(recorded_state, dict)
+                    or (recorded_state.get("pid"), recorded_state.get("launch_time")) != original_process
+                    or recorded_state.get("bundle_id") != CHARACTER_BUNDLE_ID
+                    or recorded_state.get("application") != before_state.get("application")
+                    or recorded_state.get("project_roots") != [root_value]
+                    or recorded_state.get("authentication_or_permission_prompt") is True):
+                raise CharacterRejected("The recorded unknown stage does not match the owned project process")
+
+        def process_is_absent(state):
+            return (isinstance(state, dict)
+                    and state.get("bundle_id") == CHARACTER_BUNDLE_ID
+                    and state.get("application") == before_state.get("application")
+                    and state.get("running") is False
+                    and type(state.get("process_count")) is int and state["process_count"] == 0
+                    and type(state.get("bundle_process_count")) is int
+                    and state["bundle_process_count"] == 0
+                    and state.get("pid") is None and state.get("launch_time") is None
+                    and state.get("authentication_or_permission_prompt") is not True)
+
+        first_state = observed.get("state") if isinstance(observed, dict) else None
+        first_fingerprint = first_state.get("fingerprint") if isinstance(first_state, dict) else None
+        if (not process_is_absent(first_state) or not isinstance(first_fingerprint, str)
+                or not first_fingerprint or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Abandon requires an exited app and unchanged owned project root")
+        second = self.bridge.call("inspect", cancelled=cancelled)
+        second_state = second.get("state", {})
+        if (not process_is_absent(second_state)
+                or second_state.get("fingerprint") != first_fingerprint
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Abandon requires two stable stopped-process observations and the same owned root")
+
+        result = {"status": "unknown_operation_abandoned",
+                  "completion": "native_outcome_unknown", "project_root": root_value,
+                  "native": second}
+        resolved = dict(packet)
+        resolved.update(state="resolved", resolution="abandon_after_exit",
+                        reconciliation_basis="owned_project_process_exited_with_unknown_operation",
+                        abandoned_lease_id=lease_id,
+                        abandoned_project_root_identity=root_identity,
+                        abandonment_native=second, result=result)
+        receipts = self.directory / "operations"
+        receipts.mkdir(exist_ok=True, mode=0o700)
+        receipt = receipts / (packet["operation_id"] + ".json")
+        if receipt.exists():
+            archived = self.read("operations/" + packet["operation_id"] + ".json")
+            archived_result = archived.get("result") if isinstance(archived, dict) else None
+            archived_native = archived.get("abandonment_native") if isinstance(archived, dict) else None
+            if (not isinstance(archived, dict)
+                    or archived.get("operation_id") != packet.get("operation_id")
+                    or archived.get("resolution") != "abandon_after_exit"
+                    or archived.get("operation") != packet.get("operation")
+                    or archived.get("before_project_id") != packet.get("before_project_id")
+                    or archived.get("parameters") != packet.get("parameters")
+                    or archived.get("abandoned_lease_id") != lease_id
+                    or archived.get("abandoned_project_root_identity") != root_identity
+                    or not isinstance(archived_result, dict)
+                    or archived_result.get("status") != "unknown_operation_abandoned"
+                    or archived_result.get("completion") != "native_outcome_unknown"
+                    or archived_result.get("project_root") != root_value
+                    or not isinstance(archived_native, dict)
+                    or not process_is_absent(archived_native.get("state"))
+                    or archived_native.get("state", {}).get("fingerprint") != first_fingerprint):
+                raise CharacterRejected("A different recovery receipt already exists for this operation")
+
+        current_lease = self.read("lease.json")
+        if (not isinstance(current_lease, dict)
+                or current_lease.get("lease_id") != lease_id
+                or current_lease.get("owner") != lease.get("owner")
+                or current_lease.get("project_id") != packet.get("before_project_id")
+                or current_lease.get("owned_root") != root_value
+                or current_lease.get("owned_root_identity") != root_identity
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("The matching owned lease or project root changed before abandonment")
+        expiry = current_lease.get("expires_at")
+        if not isinstance(expiry, (int, float)) or isinstance(expiry, bool):
+            raise CharacterRejected("The matching lease has an invalid expiry")
+        current_lease["expires_at"] = 0
+        try:
+            write_json(self.directory / "lease.json", current_lease)
+        except OSError as exc:
+            raise CharacterUnknown("The owned lease could not be expired; the unknown operation remains retained") from exc
+        if not receipt.exists():
+            try:
+                write_json(receipt, resolved)
+            except OSError as exc:
+                raise CharacterUnknown("The owned lease expired but the abandonment receipt was not committed") from exc
+        try:
+            (self.directory / "operation.json").unlink()
+        except OSError as exc:
+            raise CharacterUnknown("The unknown outcome was archived and its lease expired; the pending journal remains") from exc
+        return {**result, "operation_id": packet["operation_id"], "retry_safe": False}
 
     def _reconcile_copy_after_exit(self, packet, lease, lease_id, observed, cancelled):
         recorded_native = packet.get("native")

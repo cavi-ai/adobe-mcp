@@ -89,6 +89,9 @@ app and rechecks the recorded process, project, and exact chooser before continu
 For an unknown initial Save As whose app process has exited,
 `operation_control(action="reconcile_copy_after_exit")` can record that the destination
 is absent and no copy was verified; it does not report a successful save or a user cancellation.
+For an unknown operation on a first-hand owned project, `operation_control(action="abandon_after_exit")`
+archives the operation after two stable observations confirm that its original process and all Character Animator
+instances have exited. The operation remains recorded as unknown; project and media files are preserved.
 
 ## Development
 

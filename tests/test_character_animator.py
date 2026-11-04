@@ -515,6 +515,136 @@ class CharacterOwnershipTests(unittest.TestCase):
             self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
         return lease, self.client.inspect()["pending_operation"]
 
+    def pending_owned_unknown_import_after_exit(self):
+        self.native.state.update(
+            bundle_id="com.adobe.Character-Animator.application",
+            application="/Applications/Adobe Character Animator 2026/Adobe Character Animator 2026.app",
+            pid=29112, launch_time=1793689177.654345, running=True, process_count=1,
+            authentication_or_permission_prompt=False)
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        lease = self.client.read("lease.json")
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        self.native.state.update(running=False, process_count=0, pid=None, launch_time=None,
+                                 bundle_process_count=0, fingerprint="character-app-stopped")
+        self.native.state.pop("project_roots", None)
+        return lease, packet
+
+    def test_abandon_unknown_owned_import_after_exit_preserves_project_and_input(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        root = Path(lease["owned_root"])
+        input_path = self.root / "workspace/voice.wav"
+        before_project = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+        before_input = input_path.read_bytes()
+        before_calls = list(self.native.calls)
+
+        result = self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                               lease["lease_id"])
+
+        self.assertEqual(result["status"], "unknown_operation_abandoned")
+        self.assertEqual(result["completion"], "native_outcome_unknown")
+        self.assertFalse(result["retry_safe"])
+        self.assertEqual(self.native.calls, before_calls + ["inspect", "inspect"])
+        self.assertIsNone(self.client.read("operation.json"))
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["state"], "resolved")
+        self.assertEqual(archived["resolution"], "abandon_after_exit")
+        self.assertEqual(archived["failure"], packet["failure"])
+        self.assertEqual(archived["result"]["completion"], "native_outcome_unknown")
+        self.assertEqual(self.client.read("lease.json")["lease_id"], lease["lease_id"])
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        self.assertEqual({p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()},
+                         before_project)
+        self.assertEqual(input_path.read_bytes(), before_input)
+        self.assertNotIn("import", self.native.calls[len(before_calls):])
+
+    def test_abandon_unknown_rejects_active_app_wrong_lease_or_changed_owned_root(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        original_lease = copy.deepcopy(self.client.read("lease.json"))
+        original_packet = copy.deepcopy(self.client.read("operation.json"))
+        cases = (
+            ("active instance", lambda: self.native.state.update(running=True, process_count=1,
+                                                                    pid=29112, launch_time=1793689177.654345),
+             lease["lease_id"]),
+            ("secondary instance", lambda: self.native.state.update(process_count=1), lease["lease_id"]),
+            ("alternate same-bundle application", lambda: self.native.state.update(
+                bundle_process_count=1), lease["lease_id"]),
+            ("wrong lease", lambda: None, "0" * 32),
+            ("missing owner binding", lambda: write_json(
+                self.client.directory / "lease.json",
+                {**original_lease, "owner": ""}), lease["lease_id"]),
+        )
+        for label, damage, requested_lease in cases:
+            with self.subTest(case=label):
+                write_json(self.client.directory / "operation.json", original_packet)
+                write_json(self.client.directory / "lease.json", original_lease)
+                self.native.state.update(running=False, process_count=0, pid=None, launch_time=None)
+                damage()
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                                  requested_lease)
+                self.assertEqual(self.client.read("operation.json"), original_packet)
+                self.assertNotEqual(self.client.read("lease.json").get("expires_at"), 0)
+
+        for label, mutation in (
+                ("wrong project", lambda damaged: damaged.update(before_project_id="foreign")),
+                ("wrong root", lambda damaged: damaged["parameters"].update(project_root="foreign")),
+                ("unsupported operation", lambda damaged: damaged.update(operation="project_select"))):
+            with self.subTest(case=label):
+                damaged = copy.deepcopy(original_packet)
+                mutation(damaged)
+                write_json(self.client.directory / "operation.json", damaged)
+                write_json(self.client.directory / "lease.json", original_lease)
+                with self.assertRaises(CharacterRejected):
+                    self.client.operation_control("abandon_after_exit", packet["operation_id"],
+                                                  lease["lease_id"])
+                self.assertEqual(self.client.read("operation.json"), damaged)
+                self.assertEqual(self.client.read("lease.json"), original_lease)
+
+        write_json(self.client.directory / "operation.json", original_packet)
+        write_json(self.client.directory / "lease.json", original_lease)
+        root = Path(original_lease["owned_root"])
+        root.rename(root.with_name("Owned-moved"))
+        with self.assertRaises(CharacterRejected):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+
+    def test_abandon_unknown_retries_partial_archive_and_unlink_failures(self):
+        lease, packet = self.pending_owned_unknown_import_after_exit()
+        receipt = self.client.directory / "operations" / (packet["operation_id"] + ".json")
+        original_write = write_json
+
+        def fail_receipt(path, value):
+            if Path(path) == receipt:
+                raise OSError("fixture receipt write failure")
+            return original_write(path, value)
+
+        with (patch("cavi_adobe_mcp.character_animator.write_json", fail_receipt),
+              self.assertRaisesRegex(CharacterUnknown, "receipt was not committed")):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        self.assertEqual(self.client.read("lease.json")["expires_at"], 0)
+        self.assertEqual(self.client.read("operation.json"), packet)
+
+        original_unlink = Path.unlink
+        operation_path = self.client.directory / "operation.json"
+
+        def fail_unlink(path, *args, **kwargs):
+            if path == operation_path:
+                raise OSError("fixture operation unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with (patch.object(Path, "unlink", fail_unlink),
+              self.assertRaisesRegex(CharacterUnknown, "pending journal remains")):
+            self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        archived = self.client.read("operations/" + packet["operation_id"] + ".json")
+        self.assertEqual(archived["result"]["completion"], "native_outcome_unknown")
+        self.assertEqual(self.client.read("operation.json"), packet)
+        self.client.operation_control("abandon_after_exit", packet["operation_id"], lease["lease_id"])
+        self.assertIsNone(self.client.read("operation.json"))
+
     def test_copy_uses_fresh_observation_and_retains_source_identity_limits(self):
         lease = self.claim()
         result = self.client.save_copy("copies", "Owned", lease["lease_id"])

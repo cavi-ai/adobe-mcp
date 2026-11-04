@@ -188,13 +188,15 @@ final class Observation {
         return current
     }
     func observe(full: Bool = true) throws -> Observation {
-        let matches = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+        let bundleMatches = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+        let matches = bundleMatches
             .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
         var state: [String: Any] = ["bundle_id": characterBundleID, "application": applicationURL.path,
             "app_version": Bundle(url: applicationURL)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
             "accessibility_trusted": AXIsProcessTrusted(), "post_events_authorized": CGPreflightPostEventAccess(),
             "screen_capture_authorized": CGPreflightScreenCaptureAccess(),
-            "running": !matches.isEmpty, "process_count": matches.count, "launches_application": false]
+            "running": !matches.isEmpty, "process_count": matches.count,
+            "bundle_process_count": bundleMatches.count, "launches_application": false]
         guard matches.count <= 1 else { try fail("AMBIGUOUS_PROCESS", "Multiple Character Animator instances are running") }
         guard let application = matches.first else {
             state["fingerprint"] = sha(try canonical(state)); lastState = state
