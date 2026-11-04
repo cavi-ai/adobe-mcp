@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-04
+
+### Fixed
+
+- Reconcile recorded initial Save As directory requests after stable source and absent-destination checks.
+- Validate initial project-copy paths before continuing a pending save.
+
 ## 0.1.0 - 2026-11-04
 
 ### Added
