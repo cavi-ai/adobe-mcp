@@ -42,6 +42,7 @@ class NativeFixture:
         self.fail_export_destination = False
         self.hide_chooser_after_command = False
         self.export_inspect_states = []
+        self.import_inspect_states = []
         self.open_without_root = False
 
     def call(self, operation, parameters=None, expected=None, cancelled=None):
@@ -54,6 +55,8 @@ class NativeFixture:
             raise CharacterRejected("Stale export chooser observation", "STALE_STATE")
         if operation == "inspect" and self.export_inspect_states:
             self.state.update(copy.deepcopy(self.export_inspect_states.pop(0)))
+        if operation == "inspect" and self.import_inspect_states:
+            self.state.update(copy.deepcopy(self.import_inspect_states.pop(0)))
         if operation == "focus":
             kind = (parameters or {}).get("kind")
             panel_id, title = (("open-panel", "Import") if kind == "import" else
@@ -964,6 +967,38 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(resumed["status"], "native_import_submitted")
         self.assertEqual(self.native.calls.count("import"), 1)
         self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import + 1)
+        self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_continue_import_waits_for_stable_exact_chooser_after_transient_focus(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_import_before_envelope = True
+        with self.assertRaises(CharacterUnknown):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        packet = self.client.inspect()["pending_operation"]
+        operation_id = packet["operation_id"]
+        self.native.fail_import_before_envelope = False
+        self.native.import_inspect_states = [
+            {"fingerprint": "import-panel", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+            {"fingerprint": "temporary-main", "frontmost": True,
+             "focused_window": {"identifier": "main-window", "role": "AXLayoutArea",
+                                "title": "Character Animator"}, "windows": []},
+            {"fingerprint": "import-ready", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+            {"fingerprint": "import-ready", "frontmost": True,
+             "focused_window": {"identifier": "open-panel", "title": "Import", "modal": True},
+             "windows": [{"identifier": "open-panel", "title": "Import", "modal": True}]},
+        ]
+        import_calls = self.native.calls.count("import")
+
+        result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertIsNone(self.client.inspect()["pending_operation"])
 
     def test_import_recovery_keeps_unknown_when_owned_root_changed(self):

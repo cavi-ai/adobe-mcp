@@ -1404,14 +1404,29 @@ class CharacterAnimator:
                                 or current_state.get("authentication_or_permission_prompt") is True):
                             raise CharacterRejected("Project, process or prompt changed while the import chooser settled")
                         if current_state.get("frontmost") is not True:
-                            raise CharacterRejected("The exact import chooser is no longer in the foreground")
+                            previous = None
+                            observed, state = current, current_state
+                            time.sleep(.1)
+                            continue
                         current_focus = current_state.get("focused_window") or {}
                         valid_focus = ((current_focus.get("identifier") == "open-panel"
                                         and current_focus.get("title") == "Import")
                                        or (current_focus.get("identifier") == "GoToWindow"
-                                           and current_focus.get("role") == "AXSheet"))
+                                           and current_focus.get("role") == "AXSheet"
+                                           and self._chooser_visible(current_state, "import", allow_go_to=True)))
                         if not valid_focus:
-                            raise CharacterRejected("The exact existing Import or Go To chooser is no longer focused")
+                            modal_windows = [window for window in current_state.get("windows", [])
+                                             if window.get("modal") is True or window.get("role") == "AXSheet"]
+                            allowed_modal = all(
+                                (window.get("identifier") == "open-panel" and window.get("title") == "Import")
+                                or (window.get("identifier") == "GoToWindow" and window.get("role") == "AXSheet")
+                                for window in modal_windows)
+                            if not allowed_modal:
+                                raise CharacterRejected("An unrelated modal replaced the exact Import chooser")
+                            previous = None
+                            observed, state = current, current_state
+                            time.sleep(.1)
+                            continue
                         fingerprint = current_state.get("fingerprint")
                         if fingerprint and fingerprint == previous:
                             observed, state, stable = current, current_state, True
