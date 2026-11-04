@@ -150,7 +150,7 @@ final class Observation {
         // This fixed read-only process inspects only the target app's open project-file paths.
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-n", "-P", "-a", "-p", String(pid), "-Fn"]
+        process.arguments = ["-b", "-n", "-P", "-a", "-p", String(pid), "-Fn"]
         process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
         do { try process.run() }
         catch { throw ProjectHandleFailure(code: "launch_failed", message: "lsof could not start",
