@@ -543,6 +543,18 @@ class CharacterAnimator:
                 and any(window.get("identifier") == panel[0] and window.get("title") == panel[1]
                         for window in state.get("windows", []) if isinstance(window, dict)))
 
+    @staticmethod
+    def _background_main(state):
+        if state.get("frontmost") is not False:
+            return False
+        focused = state.get("focused_window")
+        if focused is not None:
+            return focused.get("role") == "AXLayoutArea" and focused.get("modal") is not True
+        canvases = [window for window in state.get("windows", [])
+                    if isinstance(window, dict) and window.get("role") == "AXLayoutArea"
+                    and window.get("modal") is not True]
+        return len(canvases) == 1
+
     def _focus_owned_chooser(self, observed, kind, project_root, cancelled, allow_go_to):
         state = observed.get("state", {})
         focused = state.get("focused_window") or {}
@@ -574,9 +586,7 @@ class CharacterAnimator:
             raise CharacterRejected("An unrelated native modal blocks chooser activation")
 
         chooser = self._chooser_visible(state, kind, allow_go_to) or panel_visible
-        background_main = (state.get("frontmost") is False
-                           and focused.get("role") == "AXLayoutArea"
-                           and focused.get("modal") is not True
+        background_main = (self._background_main(state)
                            and not modal_windows and not focused_modal)
         if state.get("frontmost") is True and chooser:
             return observed
@@ -634,11 +644,7 @@ class CharacterAnimator:
                 import_parent = any(window.get("identifier") == "open-panel"
                                     and window.get("title") == "Import"
                                     and window.get("modal") is True for window in windows)
-                background_main = (state.get("frontmost") is False
-                                   and focus.get("role") == "AXLayoutArea"
-                                   and focus.get("modal") is not True
-                                   and any(window.get("role") == "AXLayoutArea"
-                                           for window in windows if isinstance(window, dict)))
+                background_main = self._background_main(state)
                 exact_open_panel = ((focus.get("identifier") == "open-panel"
                                      and focus.get("title") == "Import"
                                      and focus.get("modal") is True)
@@ -1514,8 +1520,7 @@ class CharacterAnimator:
                                  and focus.get("title") == "Save Project As")
                 is_go_to = (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")
                 if not (is_save_panel or is_go_to):
-                    main_window = (focus.get("role") == "AXLayoutArea"
-                                   and focus.get("modal") is not True)
+                    main_window = self._background_main(state)
                     modal = (focus.get("modal") is True
                              or any(window.get("modal") is True or window.get("role") == "AXSheet"
                                     for window in state.get("windows", []) if isinstance(window, dict)))

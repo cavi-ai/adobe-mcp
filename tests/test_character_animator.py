@@ -559,9 +559,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         lease, packet = self.pending_save_as()
         self.native.fail = False
         self.native.state.update(frontmost=False, fingerprint="background-resume",
-                                 focused_window={"identifier": "main-window", "role": "AXLayoutArea",
-                                                 "title": "Adobe Character Animator 2026",
-                                                 "frame": [0, 39, 2056, 1290]},
+                                 focused_window=None,
                                  windows=[{"identifier": "main-window", "role": "AXLayoutArea",
                                            "title": "Adobe Character Animator 2026", "modal": False,
                                            "frame": [0, 39, 2056, 1290]}])
@@ -661,9 +659,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         source.write_bytes(b"fixture WAV bytes")
         self.native.state["fingerprint"] = "existing-import"
         self.native.state["frontmost"] = False
-        self.native.state["focused_window"] = {"identifier": "main-window", "role": "AXLayoutArea",
-                                                "title": "Adobe Character Animator 2026",
-                                                "frame": [0, 39, 2056, 1290]}
+        self.native.state["focused_window"] = None
         self.native.state["windows"] = [
             {"identifier": "open-panel", "title": "Import", "modal": True},
             {"identifier": "main-window", "role": "AXLayoutArea", "title": "Adobe Character Animator 2026",

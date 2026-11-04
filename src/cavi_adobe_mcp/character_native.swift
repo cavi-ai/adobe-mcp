@@ -484,18 +484,17 @@ final class Observation {
     }
     func safeBackgroundMain(_ observation: Observation) -> Bool {
         guard observation.state["frontmost"] as? Bool == false,
-              let focused = observation.focusedWindow,
-              text(focused, "AXRole") == "AXLayoutArea",
-              bool(focused, "AXModal") != true,
-              let focusedTitle = text(focused, "AXTitle"),
-              let focusedFrame = frame(focused) else { return false }
-        let matchingWindows = observation.nodes.filter { element, _ in
+              hasNoUnrelatedModal(observation) else { return false }
+        let canvases = observation.nodes.filter { element, _ in
             text(element, "AXRole") == "AXLayoutArea"
-                && text(element, "AXTitle") == focusedTitle
-                && frame(element) == focusedFrame
+                && text(element, "AXTitle") != nil && frame(element) != nil
                 && bool(element, "AXModal") != true
         }
-        return matchingWindows.count == 1 && hasNoUnrelatedModal(observation)
+        guard canvases.count == 1 else { return false }
+        if let focused = observation.focusedWindow {
+            return CFEqual(focused, canvases[0].0)
+        }
+        return true
     }
     func hasNoUnrelatedModal(_ observation: Observation) -> Bool {
         !observation.nodes.contains { element, _ in
