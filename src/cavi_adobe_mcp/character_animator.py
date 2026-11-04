@@ -754,7 +754,26 @@ class CharacterAnimator:
                 go_to_export = (focus.get("identifier") == "GoToWindow"
                                 and focus.get("role") == "AXSheet" and export_parent)
                 if not (export_panel or go_to_export):
-                    raise CharacterRejected("Continue requires the exact existing Export Scene or its Go To chooser")
+                    main_window = (state.get("frontmost") is False
+                                   and focus.get("role") == "AXLayoutArea"
+                                   and focus.get("title") == "Character Animator")
+                    modal = (focus.get("modal") is True
+                             or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                    for window in windows if isinstance(window, dict)))
+                    if (not main_window or modal):
+                        raise CharacterRejected("Continue requires the exact Export Scene chooser or a background main window for guarded activation")
+                    activated = self.bridge.call("focus", {"kind": "export_png_wav", "project_root": source_root},
+                                                 expected=state, cancelled=cancelled)
+                    activated_state = activated.get("state", {})
+                    if (project_identity(activated_state) != packet["before_project_id"]
+                            or activated_state.get("project_roots") != [source_root]
+                            or (activated_state.get("pid"), activated_state.get("launch_time"))
+                            != (state.get("pid"), state.get("launch_time"))
+                            or activated_state.get("frontmost") is not True
+                            or activated_state.get("authentication_or_permission_prompt") is True
+                            or not self._chooser_visible(activated_state, "export_png_wav", True)):
+                        raise CharacterRejected("Activation did not expose the exact same-process Export Scene chooser")
+                    observed, state = activated, activated_state
                 arguments = {"kind": "export_png_wav", "directory": str(target),
                              "basename": intent.get("name"), "project_root": source_root}
 
@@ -910,6 +929,27 @@ class CharacterAnimator:
                     write_json(self.directory / "lease.json", lease)
                     (self.directory / "operation.json").unlink()
                     return {**result, "operation_id": operation_id, "retry_safe": False}
+                if not self._chooser_visible(state, "import", allow_go_to=True):
+                    main_window = (state.get("frontmost") is False
+                                   and focus.get("role") == "AXLayoutArea"
+                                   and focus.get("title") == "Character Animator")
+                    modal = (focus.get("modal") is True
+                             or any(window.get("modal") is True or window.get("role") == "AXSheet"
+                                    for window in state.get("windows", []) if isinstance(window, dict)))
+                    if not main_window or modal or state.get("authentication_or_permission_prompt") is True:
+                        raise CharacterRejected("Continue requires the exact existing Import or Go To chooser, or a background main window for guarded activation")
+                    activated = self.bridge.call("focus", {"kind": "import", "project_root": source_root},
+                                                 expected=state, cancelled=cancelled)
+                    activated_state = activated.get("state", {})
+                    if (project_identity(activated_state) != packet["before_project_id"]
+                            or activated_state.get("project_roots") != [source_root]
+                            or (activated_state.get("pid"), activated_state.get("launch_time"))
+                            != (state.get("pid"), state.get("launch_time"))
+                            or activated_state.get("frontmost") is not True
+                            or activated_state.get("authentication_or_permission_prompt") is True
+                            or not self._chooser_visible(activated_state, "import", allow_go_to=True)):
+                        raise CharacterRejected("Activation did not expose the exact same-process Import chooser")
+                    observed, state, focus = activated, activated_state, activated_state.get("focused_window") or {}
                 if not ((focus.get("identifier") == "open-panel" and focus.get("title") == "Import")
                         or (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")):
                     raise CharacterRejected("Continue requires the exact existing Import or Go To chooser")
