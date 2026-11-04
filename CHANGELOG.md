@@ -5,6 +5,19 @@
 ### Added
 
 - Prepare, open and claim a verified workspace copy of a closed Character Animator project.
+## 0.2.3 - 2026-11-04
+
+### Fixed
+
+- The shipped Swift helper build test runs only on macOS, so Linux CI and release runs with a Swift toolchain pass.
+
+## 0.2.2 - 2026-11-04
+
+### Changed
+
+- Releases build and test on Ubuntu runners; the unit matrix also runs on Ubuntu.
+
+## 0.2.1 - 2026-11-04
 
 ### Fixed
 
@@ -12,13 +25,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- Keep Character Animator ownership responses stable while opening a prepared project copy.
+- Activate the exact owned background chooser before continuing its recorded operation.
+
+## 0.2.0 - 2026-11-04
+
 ### Added
 
 - Photoshop can resample an owned document to exact pixel dimensions while retaining editable layers and paths.
 
 ### Fixed
 
-- Keep Character Animator ownership responses stable while opening a prepared project copy.
 - Character Animator reactivates a background owned chooser only after checking the expected project, process, and chooser.
 - Character Animator export continuation resumes the recorded chooser step and verifies a stable chooser state before the next command.
 
