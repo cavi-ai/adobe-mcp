@@ -1645,11 +1645,28 @@ Task { @MainActor in
     } catch {
         let known = error as? NativeFailure
         if operation == "continue_chooser" {
-            adapter?.progress("native_failure", details: [
+            var failureDetails: [String: Any] = [
                 "phase": adapter?.phase ?? "unknown",
                 "native_code": known?.code ?? "NATIVE_INSPECTION_FAILED",
                 "submission_may_have_started": adapter?.submissionMayHaveStarted ?? false,
-            ], sync: true)
+            ]
+            if let foreground = NSWorkspace.shared.frontmostApplication {
+                failureDetails["foreground_pid"] = Int(foreground.processIdentifier)
+                failureDetails["foreground_bundle_id"] = String((foreground.bundleIdentifier ?? "unknown").prefix(128))
+                failureDetails["foreground_name"] = String((foreground.localizedName ?? "unknown").prefix(128))
+            } else {
+                failureDetails["foreground_pid"] = NSNull()
+                failureDetails["foreground_bundle_id"] = NSNull()
+                failureDetails["foreground_name"] = NSNull()
+            }
+            if let lastState = adapter?.lastState {
+                failureDetails["target_pid"] = lastState["pid"] ?? NSNull()
+                failureDetails["last_observed_prompt"] = lastState["authentication_or_permission_prompt"] ?? NSNull()
+            } else {
+                failureDetails["target_pid"] = NSNull()
+                failureDetails["last_observed_prompt"] = NSNull()
+            }
+            adapter?.progress("native_failure", details: failureDetails, sync: true)
         }
         let unknown = commandPaths[operation] != nil || operation == "project_select"
             ? adapter?.primaryCommandDispatched == true : adapter?.dispatched == true
