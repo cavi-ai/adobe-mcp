@@ -54,10 +54,6 @@ cavi-animate-mcp = "cavi_adobe_mcp.animate_server:main"
 cavi-character-animator-mcp = "cavi_adobe_mcp.character_animator_server:main"
 cavi-dimension-mcp = "cavi_adobe_mcp.dimension_server:main"
 
-# Until cavi-mcp-core is on PyPI, uv resolves it from its public repository.
-[tool.uv.sources]
-cavi-mcp-core = { git = "https://github.com/cavi-ai/mcp-core.git", rev = "76f427f6c6f2ca0dc12faaebd53063930ff67b51" }
-
 [dependency-groups]
 dev = ["numpy>=2.0,<3", "pypng>=0.20220715.0,<1", "ruff>=0.14,<1"]
 
