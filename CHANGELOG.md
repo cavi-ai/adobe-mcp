@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Photoshop can resample an owned document to exact pixel dimensions while retaining editable layers and paths.
+
 ### Fixed
 
 - Character Animator reactivates a background owned chooser only after checking the expected project, process, and chooser.

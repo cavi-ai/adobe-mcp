@@ -715,6 +715,16 @@ class AdobeAuthoring:
     def edit_layers(self, session_id: str, edits: list[dict]):
         return self._owned_action(session_id, "edit_layers", {"edits": validate_edits(edits)})
 
+    def resize_image(self, session_id: str, width: int, height: int):
+        """Resample an owned Photoshop document while retaining its editable contents."""
+        if self.app != "photoshop":
+            raise ValueError("Image resizing is supported only in Photoshop")
+        for label, value in (("width", width), ("height", height)):
+            if type(value) is not int or not 1 <= value <= 2880:
+                raise ValueError(f"{label} must be an integer in 1..2880")
+        return self._owned_action(session_id, "resize_image", {
+            "resize_width": width, "resize_height": height})
+
     def add_rectangle(self, session_id: str, name: str, bounds: list, rgb: list,
                       opacity: float = 100):
         """Add a new filled motif/mask layer. Bounds are x,y,width,height in px (PS) or pt (AI)."""

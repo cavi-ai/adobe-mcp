@@ -128,6 +128,14 @@ def adobe_create_canvas(width: Annotated[StrictInt, Field(ge=1, le=2880)],
 
 
 @mcp.tool(annotations=MUTATE)
+def adobe_resize_image(application: Literal["photoshop"], session_id: str,
+                       width: Annotated[StrictInt, Field(ge=1, le=2880)],
+                       height: Annotated[StrictInt, Field(ge=1, le=2880)]) -> AdobeMutation:
+    """Resample an owned Photoshop PSD to pixel dimensions while retaining editable layers and paths."""
+    return invoke(app(application).resize_image, session_id, width, height)
+
+
+@mcp.tool(annotations=MUTATE)
 def adobe_edit_layers(application: App, session_id: str,
                       edits: Annotated[list[LayerEdit], Field(min_length=1, max_length=64)]) -> AdobeMutation:
     """Rename, hide/show or change opacity of exact paths with expected names in an owned copy."""
