@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cavi-adobe-mcp"
+version = "0.1.0"
+description = "MCP servers for Adobe Photoshop, Illustrator, After Effects, Animate, Character Animator and Dimension"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "CAVI AI" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "photoshop",
+    "illustrator",
+    "after-effects",
+    "animate",
+    "character-animator",
+    "dimension",
+    "game-art",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anyio>=4.5,<5",
+    "cavi-mcp-core>=0.1,<0.2",
+    "mcp>=2.3,<3",
+    "pillow>=13.0,<14",
+    "pydantic>=2.11,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/cavi-ai/adobe-mcp#readme"
+Repository = "https://github.com/cavi-ai/adobe-mcp"
+Issues = "https://github.com/cavi-ai/adobe-mcp/issues"
+Changelog = "https://github.com/cavi-ai/adobe-mcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cavi-adobe-authoring-mcp = "cavi_adobe_mcp.authoring_server:main"
+cavi-animate-mcp = "cavi_adobe_mcp.animate_server:main"
+cavi-character-animator-mcp = "cavi_adobe_mcp.character_animator_server:main"
+cavi-dimension-mcp = "cavi_adobe_mcp.dimension_server:main"
+
+# Until cavi-mcp-core is on PyPI, uv resolves it from its public repository.
+[tool.uv.sources]
+cavi-mcp-core = { git = "https://github.com/cavi-ai/mcp-core.git", rev = "76f427f6c6f2ca0dc12faaebd53063930ff67b51" }
+
+[dependency-groups]
+dev = ["numpy>=2.0,<3", "pypng>=0.20220715.0,<1", "ruff>=0.14,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cavi_adobe_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproject.toml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

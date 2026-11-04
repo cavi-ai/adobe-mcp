@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.tmp/
+.worktrees/
+.DS_Store
+.adobe-authoring/
+.animate-authoring/
