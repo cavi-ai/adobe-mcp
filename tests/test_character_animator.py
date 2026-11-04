@@ -1245,10 +1245,22 @@ class CharacterOwnershipTests(unittest.TestCase):
         operation_id = pending["operation_id"]
 
         self.native.fail_import_before_envelope = False
+        staged = Path(pending["intent"]["import_copy"])
+        self.native.state.update(
+            frontmost=False,
+            focused_window={"identifier": "main-window", "role": "AXLayoutArea",
+                            "title": "Adobe Character Animator 2026"},
+            windows=[{"identifier": "open-panel", "title": "Import", "modal": True},
+                     {"identifier": "main-window", "role": "AXLayoutArea",
+                      "title": "Adobe Character Animator 2026", "modal": False}],
+            selected_elements=[{"role": "AXTextField", "value": staged.name,
+                                "url": staged.as_uri(), "selected": True}],
+        )
         atomic_calls = self.native.calls.count("continue_chooser")
         resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(resumed["status"], "native_import_submitted")
+        self.assertTrue(self.native.last_continue_chooser_parameters["ax_only"])
         self.assertEqual(self.native.calls.count("import"), 1)
         self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
@@ -1276,6 +1288,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
+        self.assertFalse(self.native.last_continue_chooser_parameters["ax_only"])
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
@@ -1323,6 +1336,7 @@ class CharacterOwnershipTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(result["operation_id"], operation_id)
+        self.assertTrue(self.native.last_continue_chooser_parameters["ax_only"])
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), 2)
 

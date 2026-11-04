@@ -435,6 +435,19 @@ final class Observation {
             try fail("PROJECT_IDENTITY_UNAVAILABLE", "An explicit owned project root must match the sole native project-data handle root")
         }
     }
+    func sameProcessAncestor(_ element: AXUIElement, ancestor: AXUIElement, pid: pid_t) -> Bool {
+        var elementPID: pid_t = 0
+        guard AXUIElementGetPid(element, &elementPID) == .success, elementPID == pid else { return false }
+        var parent = axElement(attribute(element, "AXParent"))
+        for _ in 0..<16 {
+            guard let current = parent else { return false }
+            var parentPID: pid_t = 0
+            guard AXUIElementGetPid(current, &parentPID) == .success, parentPID == pid else { return false }
+            if CFEqual(current, ancestor) { return true }
+            parent = axElement(attribute(current, "AXParent"))
+        }
+        return false
+    }
     func openPreparedCopy(_ parameters: [String: Any], _ observation: Observation) async throws -> [String: Any] {
         guard observation.application == nil,
               observation.state["running"] as? Bool == false,
@@ -919,11 +932,14 @@ final class Observation {
     func continueChooser(_ initial: Observation, parameters: [String: Any]) async throws -> [String: Any] {
         progress("chooser_continuation_started")
         phase = "chooser_continue_preflight"
+        let axOnly = parameters["ax_only"] as? Bool == true
         guard let directory = parameters["directory"] as? String,
               let basename = parameters["basename"] as? String,
               let kind = parameters["kind"] as? String,
               ["import", "export_png_wav"].contains(kind),
+              !axOnly || kind == "import",
               let app = initial.application,
+              (!axOnly || initial.state["tree_truncated"] as? Bool == false),
               hasOnlyExpectedChooserModal(initial, kind: kind),
               initial.state["authentication_or_permission_prompt"] as? Bool != true else {
             try fail("CHOOSER_MISMATCH", "Continue requires the exact existing typed chooser without an unrelated modal or prompt")
@@ -941,6 +957,9 @@ final class Observation {
         }
         if kind == "export_png_wav" {
             try verifyExportDirectory(parameters, directory: targetDirectory, basename: basename)
+        }
+        if axOnly {
+            return try await continueDirectoryEntry(initial, parameters: parameters, axOnly: true)
         }
 
         func verify(_ current: Observation) throws {
@@ -1073,10 +1092,12 @@ final class Observation {
             try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window")
         }
     }
-    func continueDirectoryEntry(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+    func continueDirectoryEntry(_ observation: Observation, parameters: [String: Any],
+                                axOnly: Bool = false) async throws -> [String: Any] {
         var observation = observation
         phase = "directory_resume_preflight"
         guard let kind = parameters["kind"] as? String, ["save_as", "import", "export_png_wav"].contains(kind),
+              !axOnly || kind == "import",
               let directory = parameters["directory"] as? String,
               let basename = parameters["basename"] as? String,
               directory.hasPrefix("/"),
@@ -1087,18 +1108,67 @@ final class Observation {
         let directoryURL = URL(fileURLWithPath: directory).standardizedFileURL
         let selectedURL = directoryURL.appendingPathComponent(basename)
         let entryPath = kind == "import" ? selectedURL.path : directory
+        let originalPID = app.processIdentifier
+        let originalLaunch = observation.state["launch_time"] as? Double
         guard directoryURL.path == directory, directoryURL.resolvingSymlinksInPath() == directoryURL,
               selectedURL.resolvingSymlinksInPath() == selectedURL,
               FileManager.default.fileExists(atPath: selectedURL.path) == (kind == "import") else {
             try fail("INVALID_DESTINATION", "Native chooser path does not match the requested existing input or new project")
         }
         try ownedRoot(parameters, observation)
-        if let sheetElement = observation.focusedWindow,
-           text(sheetElement, "AXIdentifier") == "GoToWindow",
-           text(sheetElement, "AXRole") == "AXSheet",
+        if axOnly && observation.state["tree_truncated"] as? Bool != false {
+            try fail("CHOOSER_MISMATCH", "AX-only import requires a complete observed modal tree")
+        }
+        func exactImportPanel(_ current: Observation) -> AXUIElement? {
+            var panels: [AXUIElement] = []
+            for candidate in current.nodes.map(\.0).filter({
+                text($0, "AXIdentifier") == "open-panel" && text($0, "AXTitle") == "Import"
+                    && bool($0, "AXModal") == true
+            }) where !panels.contains(where: { CFEqual($0, candidate) }) { panels.append(candidate) }
+            return panels.count == 1 ? panels[0] : nil
+        }
+        func selectedImportReady(_ current: Observation) -> Bool {
+            guard current.state["tree_truncated"] as? Bool == false,
+                  hasOnlyExpectedChooserModal(current, kind: "import"),
+                  let importPanel = exactImportPanel(current),
+                  let panelPath = current.nodes.first(where: { CFEqual($0.0, importPanel) })?.1["path"] as? String,
+                  current.nodes.contains(where: {
+                      text($0.0, "AXIdentifier") == "where popup"
+                          && ($0.1["path"] as? String ?? "").hasPrefix(panelPath + "/")
+                          && $0.1["value"] as? String == directoryURL.lastPathComponent
+                          && (($0.1["url"] as? String).flatMap(URL.init(string:))?.standardizedFileURL.path == directory)
+                  }) else { return false }
+            var files: [AXUIElement] = []
+            for candidate in current.nodes.filter({
+                text($0.0, "AXRole") == "AXTextField" && text($0.0, "AXValue") == basename
+                    && (attribute($0.0, "AXURL") as? URL)?.standardizedFileURL == selectedURL
+                    && bool($0.0, "AXSelected") == true
+                    && ($0.1["path"] as? String ?? "").hasPrefix(panelPath + "/")
+            }).map(\.0) where !files.contains(where: { CFEqual($0, candidate) }) { files.append(candidate) }
+            return files.count == 1
+        }
+        var goToSheet: AXUIElement?
+        if axOnly {
+            let importPanel = exactImportPanel(observation)
+            var sheets: [AXUIElement] = []
+            for candidate in observation.nodes.map(\.0).filter({
+                text($0, "AXIdentifier") == "GoToWindow" && text($0, "AXRole") == "AXSheet"
+            }) where !sheets.contains(where: { CFEqual($0, candidate) }) { sheets.append(candidate) }
+            let parentedSheets = importPanel.map { panel in
+                sheets.filter { sameProcessAncestor($0, ancestor: panel, pid: app.processIdentifier) }
+            }
+                ?? []
+            guard hasOnlyExpectedChooserModal(observation, kind: "import"), parentedSheets.count <= 1 else {
+                try fail("CHOOSER_MISMATCH", "AX-only import requires one exact owned Import panel and at most one same-process Go To sheet")
+            }
+            goToSheet = parentedSheets.first
+        } else if let focused = observation.focusedWindow,
+                  text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet" {
+            goToSheet = focused
+        }
+        if let sheetElement = goToSheet,
            let sheet = observation.nodes.first(where: { CFEqual($0.0, sheetElement) }),
-           let sheetPath = sheet.1["path"] as? String,
-           let sheetFrame = frame(sheetElement) {
+           let sheetPath = sheet.1["path"] as? String {
             let matchingSheets = observation.nodes.filter {
                 text($0.0, "AXIdentifier") == "GoToWindow" && text($0.0, "AXRole") == "AXSheet"
                     && CFEqual($0.0, sheetElement)
@@ -1114,9 +1184,85 @@ final class Observation {
                 text($0.0, "AXIdentifier") == "PathTextField" && text($0.0, "AXRole") == "AXTextField"
                     && ($0.1["path"] as? String ?? "").hasPrefix(sheetPath + "/")
                     && actions($0.0).contains("AXConfirm")
+                    && (!axOnly || sameProcessAncestor($0.0, ancestor: sheetElement, pid: app.processIdentifier))
             }
             guard fields.count == 1 else {
                 try fail("CHOOSER_MISMATCH", "The focused Go To sheet path field is absent or ambiguous")
+            }
+            if axOnly {
+                guard kind == "import", hasOnlyExpectedChooserModal(observation, kind: "import"),
+                      observation.state["tree_truncated"] as? Bool == false,
+                      sameProcessAncestor(fields[0].0, ancestor: sheetElement, pid: originalPID),
+                      observation.application?.processIdentifier == originalPID,
+                      observation.state["launch_time"] as? Double == originalLaunch,
+                      observation.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""],
+                      observation.state["authentication_or_permission_prompt"] as? Bool != true else {
+                    try fail("CHOOSER_MISMATCH", "AX-only import requires the same-process owned Go To field and Import parent")
+                }
+                dispatched = true
+                guard AXUIElementSetAttributeValue(fields[0].0, "AXValue" as CFString, entryPath as CFString) == .success,
+                      text(fields[0].0, "AXValue") == entryPath else {
+                    try fail("FOCUS_UNAVAILABLE", "The exact owned import path was not set and read back")
+                }
+                let valueReadback = try observe()
+                try ownedRoot(parameters, valueReadback)
+                guard let readbackPanel = exactImportPanel(valueReadback),
+                      valueReadback.state["tree_truncated"] as? Bool == false,
+                      valueReadback.application?.processIdentifier == originalPID,
+                      valueReadback.state["launch_time"] as? Double == originalLaunch,
+                      valueReadback.state["authentication_or_permission_prompt"] as? Bool != true,
+                      hasOnlyExpectedChooserModal(valueReadback, kind: "import"),
+                      sameProcessAncestor(sheetElement, ancestor: readbackPanel, pid: originalPID) else {
+                    try fail("CHOOSER_MISMATCH", "The same owned Import and Go To controls changed after path entry")
+                }
+                var readbackSheets: [AXUIElement] = []
+                for candidate in valueReadback.nodes.map(\.0).filter({
+                    text($0, "AXIdentifier") == "GoToWindow" && text($0, "AXRole") == "AXSheet"
+                        && sameProcessAncestor($0, ancestor: readbackPanel, pid: originalPID)
+                }) where !readbackSheets.contains(where: { CFEqual($0, candidate) }) {
+                    readbackSheets.append(candidate)
+                }
+                guard readbackSheets.count == 1, CFEqual(readbackSheets[0], sheetElement),
+                      let readbackSheetPath = valueReadback.nodes.first(where: { CFEqual($0.0, readbackSheets[0]) })?.1["path"] as? String else {
+                    try fail("CHOOSER_MISMATCH", "The exact same-process Go To sheet was not observed after path entry")
+                }
+                let readbackFields = valueReadback.nodes.filter {
+                    text($0.0, "AXIdentifier") == "PathTextField" && text($0.0, "AXRole") == "AXTextField"
+                        && text($0.0, "AXValue") == entryPath
+                        && ($0.1["path"] as? String ?? "").hasPrefix(readbackSheetPath + "/")
+                        && actions($0.0).contains("AXConfirm")
+                        && sameProcessAncestor($0.0, ancestor: sheetElement, pid: originalPID)
+                }
+                guard readbackFields.count == 1 else {
+                    try fail("CHOOSER_MISMATCH", "The exact owned path field was not read back before confirmation")
+                }
+                phase = "directory_confirm"
+                try perform(readbackFields[0].0, action: "AXConfirm")
+                var selectedState: Observation?
+                for attempt in 0..<5 {
+                    try Task.checkCancellation()
+                    let current = try observe()
+                    try ownedRoot(parameters, current)
+                    guard current.application?.processIdentifier == originalPID,
+                          current.state["launch_time"] as? Double == originalLaunch,
+                          current.state["tree_truncated"] as? Bool == false,
+                          current.state["authentication_or_permission_prompt"] as? Bool != true,
+                          hasOnlyExpectedChooserModal(current, kind: "import") else {
+                        try fail("CHOOSER_MISMATCH", "The same owned Import chooser changed after path confirmation")
+                    }
+                    if selectedImportReady(current) {
+                        selectedState = current
+                        break
+                    }
+                    if attempt < 4 { try await Task.sleep(nanoseconds: 100_000_000) }
+                }
+                guard let selectedState else {
+                    try fail("INPUT_NOT_OBSERVED", "AX Go To confirmation did not expose the exact selected import file")
+                }
+                observation = selectedState
+            } else {
+            guard let sheetFrame = frame(sheetElement) else {
+                try fail("CHOOSER_MISMATCH", "The observed Go To sheet bounds are unavailable")
             }
             phase = "directory_focus"
             try await focusApplication(observation)
@@ -1214,22 +1360,47 @@ final class Observation {
                 try fail("CHOOSER_MISMATCH", "The exact requested directory was not read back from the focused Go To sheet")
             }
             try ownedRoot(parameters, observation)
+            }
+        }
+        func chooserPanel(_ current: Observation) throws -> AXUIElement {
+            if !axOnly { return try panel(current, kind: kind) }
+            guard kind == "import", let exact = exactImportPanel(current),
+                  current.application?.processIdentifier == app.processIdentifier,
+                  current.state["launch_time"] as? Double == originalLaunch,
+                  current.state["tree_truncated"] as? Bool == false,
+                  current.state["authentication_or_permission_prompt"] as? Bool != true,
+                  hasOnlyExpectedChooserModal(current, kind: "import") else {
+                try fail("CHOOSER_MISMATCH", "AX-only submission requires the exact same-process Import panel without unrelated modals")
+            }
+            try ownedRoot(parameters, current)
+            return exact
         }
         func submitSave(_ panelState: Observation) async throws -> [String: Any] {
-            _ = try panel(panelState, kind: kind)
-            try await focusApplication(panelState)
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+            _ = try chooserPanel(panelState)
+            if !axOnly { try await focusApplication(panelState) }
+            guard (axOnly || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier),
                   panelState.state["authentication_or_permission_prompt"] as? Bool != true else {
                 try fail("FOCUS_CHANGED", "Character Animator must remain foreground before directory verification")
             }
             var expanded = panelState
             if !expanded.nodes.contains(where: { $0.1["identifier"] as? String == "where popup" }) {
-                try perform(try node(expanded, identifier: "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"))
+                let disclosure = try node(expanded, identifier: "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE")
+                if axOnly {
+                    let parent = try chooserPanel(expanded)
+                    guard sameProcessAncestor(disclosure, ancestor: parent, pid: app.processIdentifier) else {
+                        try fail("CHOOSER_MISMATCH", "The observed disclosure control is not inside the exact Import panel")
+                    }
+                }
+                try perform(disclosure)
                 try await Task.sleep(nanoseconds: 120_000_000)
                 expanded = try observe()
             }
-            _ = try panel(expanded, kind: kind)
-            let whereNodes = expanded.nodes.filter { $0.1["identifier"] as? String == "where popup" }
+            let expandedPanel = try chooserPanel(expanded)
+            let expandedPath = expanded.nodes.first(where: { CFEqual($0.0, expandedPanel) })?.1["path"] as? String ?? ""
+            let whereNodes = expanded.nodes.filter {
+                $0.1["identifier"] as? String == "where popup"
+                    && (!axOnly || ($0.1["path"] as? String ?? "").hasPrefix(expandedPath + "/"))
+            }
             guard whereNodes.count == 1,
                   whereNodes[0].1["value"] as? String == directoryURL.lastPathComponent,
                   ((whereNodes[0].1["url"] as? String).flatMap(URL.init(string:)).map({ $0.standardizedFileURL.path == directory }) ?? true) else {
@@ -1239,6 +1410,7 @@ final class Observation {
                 let candidates = expanded.nodes.filter {
                     text($0.0, "AXValue") == basename && text($0.0, "AXRole") == "AXTextField"
                         && (actions($0.0).contains("AXOpen") || actions($0.0).contains("AXConfirm"))
+                        && (!axOnly || ($0.1["path"] as? String ?? "").hasPrefix(expandedPath + "/"))
                 }
                 var files: [AXUIElement] = []
                 for candidate in candidates.map(\.0) where !files.contains(where: { CFEqual($0, candidate) }) {
@@ -1256,9 +1428,10 @@ final class Observation {
                 guard selected.state["authentication_or_permission_prompt"] as? Bool != true else {
                     try fail("AUTHENTICATION_BOUNDARY", "A prompt interrupted native import selection")
                 }
-                _ = try panel(selected, kind: "import")
+                let selectedPanel = try chooserPanel(selected)
                 let button = try node(selected, identifier: "OKButton", role: "AXButton")
-                guard text(button, "AXTitle") == "Import", bool(button, "AXEnabled") == true else {
+                guard text(button, "AXTitle") == "Import", bool(button, "AXEnabled") == true,
+                      (!axOnly || sameProcessAncestor(button, ancestor: selectedPanel, pid: app.processIdentifier)) else {
                     try fail("INPUT_NOT_OBSERVED", "Native import selection did not enable its observed Import control")
                 }
                 guard let expectedHash = parameters["expected_sha256"] as? String,
@@ -1279,30 +1452,35 @@ final class Observation {
                 }
                 guard selected.application?.processIdentifier == app.processIdentifier,
                       selected.state["authentication_or_permission_prompt"] as? Bool != true,
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                      (axOnly || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier),
                       selected.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""] else {
                     try fail("PRECONDITION_CHANGED", "The same foreground process and owned project are required immediately before Import")
                 }
                 let submitReady = try observe()
-                guard submitReady.state["fingerprint"] as? String == selected.state["fingerprint"] as? String,
+                try ownedRoot(parameters, submitReady)
+                guard (axOnly || submitReady.state["fingerprint"] as? String == selected.state["fingerprint"] as? String),
                       submitReady.application?.processIdentifier == app.processIdentifier,
                       submitReady.state["authentication_or_permission_prompt"] as? Bool != true,
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+                      (axOnly || NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier),
                       submitReady.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""],
-                      (try? panel(submitReady, kind: "import")) != nil else {
+                      (try? chooserPanel(submitReady)) != nil else {
                     try fail("PRECONDITION_CHANGED", "The exact selected Import panel changed during source verification")
                 }
                 let readyButton = try node(submitReady, identifier: "OKButton", role: "AXButton")
-                guard text(readyButton, "AXTitle") == "Import", bool(readyButton, "AXEnabled") == true else {
+                let submitPanel = try chooserPanel(submitReady)
+                guard text(readyButton, "AXTitle") == "Import", bool(readyButton, "AXEnabled") == true,
+                      (!axOnly || sameProcessAncestor(readyButton, ancestor: submitPanel, pid: app.processIdentifier)) else {
                     try fail("PRECONDITION_CHANGED", "The observed Import control changed during source verification")
                 }
                 let stillSelected = submitReady.nodes.contains {
                     text($0.0, "AXValue") == basename && text($0.0, "AXRole") == "AXTextField"
                         && (attribute($0.0, "AXURL") as? URL)?.standardizedFileURL == selectedURL
                         && bool($0.0, "AXSelected") == true
+                        && (!axOnly || ($0.1["path"] as? String ?? "").hasPrefix(
+                            (submitReady.nodes.first(where: { CFEqual($0.0, submitPanel) })?.1["path"] as? String ?? "") + "/"))
                 }
                 guard stillSelected else { try fail("INPUT_NOT_OBSERVED", "The retained import file selection changed before submission") }
-                try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import"))
+                if !axOnly { try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import")) }
                 phase = "import_dispatch"
                 submissionMayHaveStarted = true
                 progress("import_submit_write_ahead", details: [

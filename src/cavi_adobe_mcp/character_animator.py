@@ -1426,15 +1426,27 @@ class CharacterAnimator:
                         and window.get("role") == "AXSheet" and import_parent)
                     for window in modal_windows)
                 existing_import = (focus.get("identifier") == "open-panel" and focus.get("title") == "Import")
-                existing_go_to = (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet"
-                                  and import_parent)
+                def contains_go_to(node):
+                    return ((node.get("identifier") == "GoToWindow" and node.get("role") == "AXSheet")
+                            or any(contains_go_to(child) for child in node.get("children", [])
+                                   if isinstance(child, dict)))
+
+                existing_go_to = import_parent and (
+                    (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")
+                    or any(window.get("identifier") == "open-panel" and window.get("title") == "Import"
+                           and contains_go_to(window) for window in windows))
+                selected_import = import_parent and any(
+                    element.get("role") == "AXTextField" and element.get("value") == staged.name
+                    and element.get("url") == staged.as_uri() and element.get("selected") is True
+                    for element in state.get("selected_elements", []) if isinstance(element, dict))
                 if not import_parent or not allowed_modals or not (existing_import or existing_go_to
                                                                     or self._background_main(state)):
                     raise CharacterRejected("An unrelated modal blocks the exact existing Import or Go To chooser")
                 arguments = {"operation_id": operation_id,
                              "kind": "import", "directory": str(staged.parent),
                              "basename": staged.name, "project_root": source_root,
-                             "expected_sha256": intent["import_copy_sha256"]}
+                             "expected_sha256": intent["import_copy_sha256"],
+                             "ax_only": existing_go_to or selected_import}
 
                 try:
                     packet.pop("native_continuation", None)
