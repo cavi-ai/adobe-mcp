@@ -11,7 +11,7 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 ### Changed
 
 - The package version is read from the release tag.
-- Requires Python 3.15 or newer; CI lints on Linux and runs the unit tests once, on macOS with Python 3.15. Dialogue and editorial WAV input still refuses float PCM, which Python 3.15's `wave` now reads.
+- Requires Python 3.15 or newer; CI lints on Linux and runs the unit tests once, on macOS with Python 3.15, after a first `pin-guard` job that fails any change adding or moving a submodule or git dependency; a green `main` dispatches `server-merged` to game-art-pipeline, whose pin bot moves it to that commit. Dialogue and editorial WAV input still refuses float PCM, which Python 3.15's `wave` now reads.
 - Every server finds its application through `cavi-mcp-core` application lookup; without an override the newest installed version is used, including for Character Animator.
 - A missing Photoshop or Illustrator reports `APP_UNAVAILABLE` instead of `INPUT_NOT_FOUND`.
 
