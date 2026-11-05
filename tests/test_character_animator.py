@@ -37,11 +37,13 @@ class NativeFixture:
         self.calls = []
         self.last_continue_chooser_parameters = None
         self.last_import_parameters = None
+        self.last_audio_wav_parameters = None
         self.fail = False
         self.directory_transition = False
         self.fail_submit = False
         self.import_directory_pending = False
         self.fail_import_before_envelope = False
+        self.fail_audio_wav_handoff = False
         self.fail_continue_import_unknown = False
         self.continue_chooser_error_context = None
         self.fail_import_focus_dispatch = False
@@ -59,6 +61,13 @@ class NativeFixture:
             self.last_import_parameters = copy.deepcopy(parameters or {})
         if expected is not None and expected["fingerprint"] != self.state["fingerprint"]:
             raise CharacterRejected("Stale observation", "STALE_STATE")
+        if operation == "open_audio_wav":
+            self.last_audio_wav_parameters = copy.deepcopy(parameters or {})
+            if self.fail_audio_wav_handoff:
+                raise CharacterUnknown("Fixture WAV handoff outcome unknown")
+            return {"version": 1, "ok": True, "operation": operation,
+                    "state": copy.deepcopy(self.state),
+                    "result": {"status": "native_audio_wav_handoff_requested", "completion": "unverified"}}
         if (operation == "chooser_destination"
                 and (parameters or {}).get("kind") == "export_png_wav"
                 and self.fail_export_destination):
@@ -181,7 +190,8 @@ class NativeFixture:
                 error = CharacterRejected("Fixture pre-dispatch export state changed", "STALE_STATE")
                 error.native_context = {"phase": "chooser_continue_preflight",
                                         "submission_may_have_started": False,
-                                        "targeted_confirmation_may_have_started": False}
+                                        "targeted_confirmation_may_have_started": False,
+                                        "targeted_navigation_may_have_started": False}
                 raise error
             if ((kind == "export_png_wav" and self.fail_export_submit)
                     or (kind == "import" and self.fail_continue_import_unknown)):
@@ -660,7 +670,10 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.client.save_copy("copies", "Owned", lease["lease_id"])
         lease = self.client.read("lease.json")
         (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
-        self.native.fail_import_before_envelope = True
+        self.native.state.update(
+            focused_window={"identifier": "open-panel", "title": "Import", "modal": True},
+            windows=[{"identifier": "open-panel", "title": "Import", "modal": True}])
+        self.native.fail_continue_import_unknown = True
         with self.assertRaises(CharacterUnknown):
             self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
         packet = self.client.inspect()["pending_operation"]
@@ -918,10 +931,55 @@ class CharacterOwnershipTests(unittest.TestCase):
         self.assertEqual(self.native.last_continue_chooser_parameters["operation_id"],
                          result["operation_id"])
         self.assertEqual(self.native.calls[len(before_import):].count("import"), 1)
-        self.assertTrue(self.native.last_import_parameters["targeted_input"])
+        self.assertNotIn("targeted_input", self.native.last_import_parameters)
+        self.assertNotIn("targeted_input", self.native.last_continue_chooser_parameters)
         self.assertEqual(self.native.calls[len(before_import):].count("chooser_destination"), 0)
         self.assertEqual(self.native.calls[len(before_import):].count("continue_chooser"), 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
+
+    def test_audio_wav_uses_hash_pinned_native_file_handoff(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        self.native.state.update(running=True, process_count=1)
+        source = self.root / "workspace/voice.wav"
+        source.write_bytes(b"fixture WAV bytes")
+        calls_before = list(self.native.calls)
+
+        result = self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+
+        self.assertEqual(result["status"], "native_import_submitted")
+        self.assertEqual(result["native"]["operation"], "open_audio_wav")
+        self.assertEqual(result["native"]["result"]["status"], "native_audio_wav_handoff_requested")
+        self.assertEqual(result["completion"], "unverified")
+        staged = Path(result["import_copy"]["path"])
+        self.assertEqual(staged.read_bytes(), source.read_bytes())
+        self.assertEqual(self.native.last_audio_wav_parameters["source_path"], str(staged))
+        self.assertEqual(self.native.last_audio_wav_parameters["expected_sha256"],
+                         result["import_copy"]["sha256"])
+        archived = self.client.read("operations/" + result["operation_id"] + ".json")
+        self.assertEqual(archived["initial_native_operation"], "open_audio_wav")
+        self.assertEqual(self.native.calls[len(calls_before):].count("open_audio_wav"), 1)
+        self.assertEqual(self.native.calls[len(calls_before):].count("continue_chooser"), 0)
+
+    def test_uncertain_audio_wav_handoff_is_not_replayed_through_chooser(self):
+        lease = self.claim()
+        self.client.save_copy("copies", "Owned", lease["lease_id"])
+        self.native.state.update(running=True, process_count=1)
+        (self.root / "workspace/voice.wav").write_bytes(b"fixture WAV bytes")
+        self.native.fail_audio_wav_handoff = True
+        with self.assertRaisesRegex(CharacterUnknown, "handoff outcome unknown"):
+            self.client.import_media("voice.wav", "audio_wav", lease["lease_id"])
+        pending = self.client.inspect()["pending_operation"]
+        self.assertEqual(pending["initial_native_operation"], "open_audio_wav")
+        self.native.fail_audio_wav_handoff = False
+        chooser_calls = self.native.calls.count("continue_chooser")
+
+        with self.assertRaisesRegex(CharacterRejected, "cannot be replayed"):
+            self.client.operation_control("continue_import", pending["operation_id"], lease["lease_id"])
+
+        self.assertEqual(self.native.calls.count("open_audio_wav"), 1)
+        self.assertEqual(self.native.calls.count("continue_chooser"), chooser_calls)
+        self.assertEqual(self.client.inspect()["pending_operation"]["operation_id"], pending["operation_id"])
 
     def test_import_adopts_exact_existing_import_chooser_without_menu_replay(self):
         lease = self.claim()
@@ -1271,7 +1329,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         resumed = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(resumed["status"], "native_import_submitted")
-        self.assertTrue(self.native.last_continue_chooser_parameters["targeted_input"])
+        self.assertNotIn("targeted_input", self.native.last_continue_chooser_parameters)
         self.assertEqual(self.native.calls.count("import"), 1)
         self.assertEqual(self.native.calls.count("chooser_destination"), chooser_calls_before_import)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
@@ -1299,7 +1357,7 @@ class CharacterOwnershipTests(unittest.TestCase):
         result = self.client.operation_control("continue_import", operation_id, lease["lease_id"])
 
         self.assertEqual(result["status"], "native_import_submitted")
-        self.assertFalse(self.native.last_continue_chooser_parameters["targeted_input"])
+        self.assertNotIn("targeted_input", self.native.last_continue_chooser_parameters)
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), atomic_calls + 1)
         self.assertIsNone(self.client.inspect()["pending_operation"])
@@ -1349,7 +1407,7 @@ class CharacterOwnershipTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "native_import_submitted")
         self.assertEqual(result["operation_id"], operation_id)
-        self.assertTrue(self.native.last_continue_chooser_parameters["targeted_input"])
+        self.assertNotIn("targeted_input", self.native.last_continue_chooser_parameters)
         self.assertEqual(self.native.calls.count("import"), import_calls)
         self.assertEqual(self.native.calls.count("continue_chooser"), 2)
 

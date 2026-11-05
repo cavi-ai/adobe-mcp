@@ -669,7 +669,7 @@ class CharacterAnimator:
 
     def mutate(self, operation, parameters, lease_id, *, owned=True, cancelled=None,
                continuation=None, intent=None, expected_fingerprint=None,
-               adopt_existing_import=False):
+               adopt_existing_import=False, native_operation=None):
         """Record uncertainty before dispatch; no implicit retry or journal clearing."""
         with self.locked(cancelled):
             before = self.inspect(cancelled)
@@ -696,7 +696,11 @@ class CharacterAnimator:
             if len(roots) != 1:
                 raise CharacterRejected("Exactly one observed native project root is required")
             parameters = {**parameters, "project_root": roots[0]}
-            initial_native_operation = operation
+            initial_native_operation = native_operation or operation
+            if (initial_native_operation == "open_audio_wav"
+                    and (before["native"]["state"].get("running") is not True
+                         or before["native"]["state"].get("process_count") != 1)):
+                initial_native_operation = operation
             if operation == "import" and adopt_existing_import:
                 state = before["native"]["state"]
                 focus = state.get("focused_window") or {}
@@ -739,7 +743,7 @@ class CharacterAnimator:
             write_json(journal, packet)
             dispatched = 0
             try:
-                native_command = "inspect" if initial_native_operation == "inspect_existing_import" else operation
+                native_command = "inspect" if initial_native_operation == "inspect_existing_import" else initial_native_operation
                 native = (self.bridge.call("inspect", cancelled=cancelled) if native_command == "inspect"
                           else self.bridge.call(native_command, parameters,
                                                expected=before["native"]["state"], cancelled=cancelled))
@@ -884,7 +888,7 @@ class CharacterAnimator:
         return selected
 
     def import_media(self, source, kind, lease_id, cancelled=None):
-        """Import one immutable workspace PSD/WAV through the observed native file chooser."""
+        """Submit a hash-pinned PSD through Import or hand a WAV copy to the running app."""
         extensions = {"puppet_psd": ".psd", "audio_wav": ".wav"}
         if kind not in extensions:
             raise CharacterRejected("Choose puppet_psd or audio_wav")
@@ -920,14 +924,23 @@ class CharacterAnimator:
             roots = native["state"].get("project_roots", [])
             if len(roots) != 1 or roots[0] != lease.get("owned_root"):
                 raise CharacterUnknown("Import requires the exact owned project root")
-            arguments = {"kind": "import", "directory": str(staged.parent),
-                         "basename": staged.name, "project_root": roots[0],
-                         "expected_sha256": staged_digest, "targeted_input": True}
-            selected = step("continue_chooser", arguments)
-            if selected.get("result", {}).get("status") != "native_chooser_submitted":
-                raise CharacterUnknown("Native import chooser was not submitted")
-            after = selected
-            if project_identity(after["state"]) != project_identity(selected["state"]):
+            if (kind == "audio_wav"
+                    and native.get("operation") == "open_audio_wav"):
+                state = native["state"]
+                if (native.get("result", {}).get("status") != "native_audio_wav_handoff_requested"
+                        or project_identity(state) != lease.get("project_id")
+                        or state.get("authentication_or_permission_prompt") is True):
+                    raise CharacterUnknown("The WAV handoff was not verified against the same owned project")
+                after = native
+            else:
+                arguments = {"kind": "import", "directory": str(staged.parent),
+                             "basename": staged.name, "project_root": roots[0],
+                             "expected_sha256": staged_digest}
+                selected = step("continue_chooser", arguments)
+                if selected.get("result", {}).get("status") != "native_chooser_submitted":
+                    raise CharacterUnknown("Native import chooser was not submitted")
+                after = selected
+            if project_identity(after["state"]) != project_identity(native["state"]):
                 raise CharacterUnknown("Character Animator project changed after import selection")
             with staged.open("rb") as stream:
                 current_staged_digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -942,8 +955,11 @@ class CharacterAnimator:
                                     "bytes": staged.stat().st_size},
                     "native": after, "source_identity": "hashed_private_import_copy"}
 
-        return self.mutate("import", {"targeted_input": True}, lease_id, cancelled=cancelled, continuation=finish,
+        wav_handoff = kind == "audio_wav"
+        native_parameters = {"source_path": str(staged), "expected_sha256": staged_digest}
+        return self.mutate("import", native_parameters, lease_id, cancelled=cancelled, continuation=finish,
                            adopt_existing_import=True,
+                           native_operation="open_audio_wav" if wav_handoff else None,
                            intent={"source": str(original), "source_sha256": source_digest,
                                    "source_bytes": before.st_size,
                                    "import_copy": str(staged), "import_copy_sha256": staged_digest,
@@ -1311,6 +1327,9 @@ class CharacterAnimator:
                     raise CharacterUnknown("Export continuation remains unresolved; inspect its operation journal") from exc
             if action in ("continue_import", "confirm_cancelled_import"):
                 intent = packet.get("intent", {})
+                if (action == "continue_import"
+                        and packet.get("initial_native_operation") == "open_audio_wav"):
+                    raise CharacterRejected("An uncertain WAV handoff cannot be replayed through the file chooser")
                 kind = intent.get("kind")
                 extension = {"puppet_psd": ".psd", "audio_wav": ".wav"}.get(kind)
                 if extension is None:
@@ -1437,18 +1456,13 @@ class CharacterAnimator:
                     (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")
                     or any(window.get("identifier") == "open-panel" and window.get("title") == "Import"
                            and contains_go_to(window) for window in windows))
-                selected_import = import_parent and any(
-                    element.get("role") == "AXTextField" and element.get("value") == staged.name
-                    and element.get("url") == staged.as_uri() and element.get("selected") is True
-                    for element in state.get("selected_elements", []) if isinstance(element, dict))
                 if not import_parent or not allowed_modals or not (existing_import or existing_go_to
                                                                     or self._background_main(state)):
                     raise CharacterRejected("An unrelated modal blocks the exact existing Import or Go To chooser")
                 arguments = {"operation_id": operation_id,
                              "kind": "import", "directory": str(staged.parent),
                              "basename": staged.name, "project_root": source_root,
-                             "expected_sha256": intent["import_copy_sha256"],
-                             "targeted_input": existing_go_to or selected_import}
+                             "expected_sha256": intent["import_copy_sha256"]}
 
                 try:
                     packet.pop("native_continuation", None)

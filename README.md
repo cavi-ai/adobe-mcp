@@ -73,6 +73,10 @@ keep them private.
 - Dimension: `dimension_status`, `dimension_launch`, `dimension_inspect`,
   `dimension_render_start`, `dimension_render_inspect`.
 
+`import_media` submits PSD puppets through the native Import chooser and hands WAV copies
+to the already-running Character Animator app. A WAV handoff receipt is not import
+confirmation; verify that the audio appears in the project's Audio rows before continuing.
+
 For a closed Character Animator project, use `project_prepare_copy` to copy its saved
 `.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
 `prepared_copy_id` to `project_open_prepared_copy`, inspect the actual

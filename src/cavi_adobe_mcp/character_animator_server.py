@@ -262,9 +262,10 @@ async def project_save_copy(directory: str, name: str, lease_id: str) -> Charact
 @mcp.tool(annotations=MUTATE)
 async def import_media(source: str, kind: Literal["puppet_psd", "audio_wav"],
                        lease_id: str) -> CharacterImportedMedia:
-    """Import one workspace PSD puppet or WAV from a hash-pinned private copy.
+    """Submit a hash-pinned workspace PSD puppet or WAV to the owned project.
 
-    Adopts an exact already-open Import chooser; otherwise opens Import once. Submission is not completion.
+    PSDs use the native Import chooser. WAVs are handed to the already-running app;
+    verify the project's Audio row because a handoff receipt does not confirm import.
     """
     return await execute(lambda cancelled: client().import_media(source, kind, lease_id, cancelled))
 
