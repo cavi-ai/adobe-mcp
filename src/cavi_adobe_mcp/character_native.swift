@@ -1298,11 +1298,25 @@ final class Observation {
                 try fail("CHOOSER_MISMATCH", "The same owned process and typed chooser must remain active without a prompt")
             }
         }
+        var directoryNavigationProved = false
         func isDirectoryReady(_ current: Observation) -> Bool {
-            guard typedChooserIsFocused(current, kind: kind),
+            guard typedChooserIsFocused(current, kind: kind) else { return false }
+            if kind == "export_png_wav",
+               current.focusedWindow.map({ text($0, "AXIdentifier") }) != "save-panel"
+                || current.focusedWindow.map({ text($0, "AXTitle") }) != "Export Scene"
+                || current.focusedWindow.map({ bool($0, "AXModal") }) != true {
+                return false
+            }
+            guard
                   let whereNode = current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" }),
-                  whereNode.1["value"] as? String == targetDirectory.lastPathComponent,
-                  (whereNode.1["url"] as? String).flatMap(URL.init(string:)).map({ $0.standardizedFileURL.path == directory }) ?? false else { return false }
+                  whereNode.1["value"] as? String == targetDirectory.lastPathComponent else { return false }
+            if let whereURL = whereNode.1["url"] as? String {
+                guard let parsed = URL(string: whereURL), parsed.standardizedFileURL.path == directory else { return false }
+            } else if kind == "export_png_wav" {
+                guard directoryNavigationProved else { return false }
+            } else {
+                return false
+            }
             if kind == "export_png_wav" {
                 return true
             }
@@ -1352,7 +1366,6 @@ final class Observation {
         if kind == "export_png_wav",
            current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel",
            !isDirectoryReady(current) {
-            var expandedDisclosure = false
             let disclosures = current.nodes.filter {
                 text($0.0, "AXIdentifier") == "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"
                     && text($0.0, "AXDescription") == "show more options"
@@ -1367,7 +1380,6 @@ final class Observation {
                 }
                 try verifyTopmostChooser(current, window: savePanel)
                 try perform(disclosures[0].0)
-                expandedDisclosure = true
                 current = try observe()
                 try verify(current)
                 guard current.state["tree_truncated"] as? Bool == false,
@@ -1375,14 +1387,6 @@ final class Observation {
                       current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel" else {
                     try fail("CHOOSER_MISMATCH", "The same Export Scene chooser was not observed after expanding its folder controls")
                 }
-            }
-            if expandedDisclosure && !isDirectoryReady(current),
-               current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel",
-               current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" })?.1["url"] as? String == nil {
-                let whereNode = current.nodes.first { $0.1["identifier"] as? String == "where popup" }
-                let whereValue = whereNode?.1["value"] as? String ?? "missing"
-                let whereURL = whereNode?.1["url"] as? String ?? "missing"
-                try fail("DIRECTORY_NOT_OBSERVED", "Export Scene Where control has no full path URL after disclosure expansion (value=\(whereValue), url=\(whereURL))")
             }
         }
         progress("chooser_initial_state", details: ["directory_ready": isDirectoryReady(current),
@@ -1400,7 +1404,13 @@ final class Observation {
                 guard current.focusedWindow.map({ text($0, "AXIdentifier") }) == "GoToWindow" else {
                     try fail("CHOOSER_MISMATCH", "The exact typed chooser or its parented Go To sheet is required")
                 }
-                _ = try await continueDirectoryEntry(current, parameters: parameters)
+                let navigation = try await continueDirectoryEntry(current, parameters: parameters)
+                guard navigation["status"] as? String == "native_directory_requested",
+                      navigation["directory"] as? String == directory,
+                      navigation["filename"] as? String == basename else {
+                    try fail("DIRECTORY_NOT_OBSERVED", "Exact absolute folder navigation was not acknowledged by the native chooser")
+                }
+                directoryNavigationProved = true
                 progress("target_directory_entry_submitted")
                 current = try await settle("target_directory") { isDirectoryReady($0) }
             }
@@ -1412,7 +1422,13 @@ final class Observation {
         guard result["status"] as? String == "native_chooser_submitted" else {
             try fail("CHOOSER_NOT_SUBMITTED", "The exact observed chooser destination was not submitted")
         }
-        return result
+        var finalResult = result
+        if kind == "export_png_wav" {
+            let observedWhereURL = current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" })?.1["url"] as? String
+            finalResult["directory_evidence_source"] = observedWhereURL == nil
+                ? "observed_absolute_go_to_navigation" : "native_where_url"
+        }
+        return finalResult
     }
 
     func verifyExportDirectory(_ parameters: [String: Any], directory: URL, basename: String) throws {
