@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import wave
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
@@ -87,6 +88,20 @@ class MediaTests(unittest.TestCase):
         self.assertEqual([x.findtext("start") for x in clips], ["0", "1"])
         self.assertEqual(editorial["native_import"], "unverified")
         self.assertEqual(len(editorial["outputs"]), 3)
+
+    def test_editorial_rejects_float_wav(self):
+        result = media.ingest(self.root, "recipe.json", "ingest")
+        path = self.root / "dialogue.wav"
+        with wave.open(str(path), "wb") as stream:
+            stream.setnchannels(1)
+            stream.setsampwidth(4)
+            stream.setframerate(48000)
+            stream.writeframes(b"\0" * 4 * 48000)
+        raw = path.read_bytes()
+        path.write_bytes(raw[:20] + b"\x03\x00" + raw[22:])
+        with self.assertRaisesRegex(ValueError, "PCM WAV"):
+            media.editorial(self.root, result["receipt"], "edit", audio="dialogue.wav")
+        self.assertFalse((self.root / "edit").exists())
 
     def test_owned_adobe_inspection_matches_output_contract(self):
         snapshot = {"runtime": {"running": True}, "pending_operation": None, "version": "test"}

@@ -17,7 +17,7 @@ only when it is called, and only an application that is already installed and li
 
 ## Requirements
 
-- macOS, Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+- macOS, Python 3.15+ and [uv](https://docs.astral.sh/uv/).
 - The Adobe applications you use, installed and signed in. No license or account is
   supplied by these servers.
 - Automation access for the MCP host to control the application (Photoshop,

@@ -28,12 +28,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Multimedia :: Graphics",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.15"
 dependencies = [
     "anyio>=4.5,<5",
     "cavi-mcp-core>=0.1.1,<0.2",
@@ -69,4 +67,4 @@ include = ["/src", "/tests", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproj
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py315"

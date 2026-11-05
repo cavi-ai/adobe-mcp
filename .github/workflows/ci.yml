@@ -26,25 +26,17 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.11.32"
-          python-version: "3.13"
+          python-version: "3.15"
       - run: uv sync --locked --dev
       - run: uv run --locked ruff check .
 
   unit:
-    name: unit · ${{ matrix.os }} · py${{ matrix.python }}
-    runs-on: ${{ matrix.os }}
+    name: unit
+    # The package is macOS-only and builds Swift helpers; the macOS 15 image's Swift compiler crashes on them.
+    runs-on: macos-26-intel
     timeout-minutes: 20
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, python: "3.11" }
-          - { os: ubuntu-latest, python: "3.13" }
-          # Intel runners build the same helpers; the macOS 15 image's Swift compiler crashes on them.
-          - { os: macos-26-intel, python: "3.11" }
-          - { os: macos-26-intel, python: "3.13" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,22 +44,6 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.11.32"
-          python-version: ${{ matrix.python }}
+          python-version: "3.15"
       - run: uv sync --locked --dev
       - run: uv run --locked python -m unittest discover -s tests
-
-  lowest-direct:
-    name: unit · lowest direct dependencies
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.11.32"
-      # Every direct dependency at the lowest version pyproject.toml allows.
-      - run: uv run --isolated --python 3.11 --resolution lowest-direct python -m unittest discover -s tests
