@@ -81,6 +81,10 @@ keep them private.
 - Dimension: `dimension_status`, `dimension_launch`, `dimension_inspect`,
   `dimension_render_start`, `dimension_render_inspect`.
 
+`import_media` submits PSD puppets through the native Import chooser and hands WAV copies
+to the already-running Character Animator app. A WAV handoff receipt is not import
+confirmation; verify that the audio appears in the project's Audio rows before continuing.
+
 For a closed Character Animator project, use `project_prepare_copy` to copy its saved
 `.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
 `prepared_copy_id` to `project_open_prepared_copy`, inspect the actual
@@ -100,6 +104,13 @@ is absent and no copy was verified; it does not report a successful save or a us
 For an unknown operation on a first-hand owned project, `operation_control(action="abandon_after_exit")`
 archives the operation after two stable observations confirm that its original process and all Character Animator
 instances have exited. The operation remains recorded as unknown; project and media files are preserved.
+
+If Character Animator has exited and no operation is pending, release the original lease with
+`session_control(action="release", lease_id=...)`. The server verifies stable process absence
+and the unchanged owned project folder before removing the lease.
+
+Interrupted native chooser calls retain bounded attempt diagnostics under `CAVI_ADOBE_DATA`.
+These diagnostics do not establish completion or authorize a retry.
 
 ## Development
 

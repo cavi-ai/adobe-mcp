@@ -125,17 +125,34 @@ final class Observation {
     var phase = "request_validation"
     var lastState: [String: Any]?
     var submissionMayHaveStarted = false
+    var targetedConfirmationMayHaveStarted = false
+    var targetedNavigationMayHaveStarted = false
     var continuationDiagnostics: [String: Any]?
+    var traceAttemptID: String?
+    var traceOperationID: String?
+    var traceCount = 0
     init(applicationPath: String) throws {
         applicationURL = URL(fileURLWithPath: applicationPath).standardizedFileURL.resolvingSymlinksInPath()
         guard applicationURL.pathExtension == "app", let bundle = Bundle(url: applicationURL),
               bundle.bundleIdentifier == characterBundleID else { try fail("APPLICATION_MISMATCH", "Application bundle identity does not match Character Animator") }
     }
+    func progress(_ event: String, details: [String: Any] = [:], sync: Bool = false) {
+        guard let attempt = traceAttemptID, traceCount < 128 else { return }
+        traceCount += 1
+        var record: [String: Any] = ["event": event, "attempt_id": attempt,
+                                     "uptime": ProcessInfo.processInfo.systemUptime]
+        if let operation = traceOperationID { record["operation_id"] = operation }
+        for (key, value) in details { record[key] = value }
+        guard let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        FileHandle.standardError.write(data)
+        FileHandle.standardError.write(Data([10]))
+        if sync { FileHandle.standardError.synchronizeFile() }
+    }
     func projectHandles(_ pid: pid_t) throws -> [String] {
         // This fixed read-only process inspects only the target app's open project-file paths.
         let process = Process(), pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-n", "-P", "-a", "-p", String(pid), "-Fn"]
+        process.arguments = ["-b", "-n", "-P", "-a", "-p", String(pid), "-Fn"]
         process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
         do { try process.run() }
         catch { throw ProjectHandleFailure(code: "launch_failed", message: "lsof could not start",
@@ -190,6 +207,7 @@ final class Observation {
         return current
     }
     func observe(full: Bool = true) throws -> Observation {
+        progress("observe_started", details: ["full": full])
         let bundleMatches = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
         let matches = bundleMatches
             .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
@@ -216,6 +234,7 @@ final class Observation {
             let frontmostCapability = AXUIElementIsAttributeSettable(root, "AXFrontmost" as CFString, &frontmostSettable)
             state["focus_control"] = ["attribute": "AXFrontmost", "settable": frontmostCapability == .success && frontmostSettable.boolValue]
             var windows = attribute(root, "AXWindows") as? [AXUIElement] ?? []
+            progress("observe_ax_windows", details: ["count": windows.count])
             if let focused = axElement(attribute(root, "AXFocusedWindow")) {
                 observation.focusedWindow = focused
                 if !windows.contains(where: { CFEqual($0, focused) }) { windows.append(focused) }
@@ -264,17 +283,93 @@ final class Observation {
                 }
                 focusedElement = axElement(attribute(candidate, "AXParent"))
             }
+            if let focused = observation.focusedWindow,
+               text(focused, "AXIdentifier") == "GoToWindow",
+               text(focused, "AXRole") == "AXSheet" {
+                var parent = axElement(attribute(focused, "AXParent"))
+                for _ in 0..<16 {
+                    guard let candidate = parent else { break }
+                    var candidatePID: pid_t = 0
+                    guard AXUIElementGetPid(candidate, &candidatePID) == .success,
+                          candidatePID == application.processIdentifier else { break }
+                    if text(candidate, "AXRole") == "AXWindow",
+                       !windows.contains(where: { CFEqual($0, candidate) }) {
+                        windows.append(candidate)
+                    }
+                    parent = axElement(attribute(candidate, "AXParent"))
+                }
+            }
             var budget = 512, truncated = false
-            func walk(_ element: AXUIElement, depth: Int, path: String) -> [String: Any] {
+            progress("observe_tree_started", details: ["windows": windows.count])
+            func supportedAttributes(_ element: AXUIElement) -> [String] {
+                var names: CFArray?
+                guard AXUIElementCopyAttributeNames(element, &names) == .success,
+                      let values = names as? [String] else { return [] }
+                return Array(values.prefix(96))
+            }
+            func selectedURLMetadata(_ element: AXUIElement, attributeName: String,
+                                     supported: [String]) -> [[String: Any]] {
+                guard supported.contains(attributeName),
+                      let selected = attribute(element, attributeName) as? [AXUIElement] else { return [] }
+                return selected.prefix(32).compactMap { item in
+                    var itemPID: pid_t = 0
+                    guard AXUIElementGetPid(item, &itemPID) == .success,
+                          itemPID == application.processIdentifier else { return nil }
+                    let url = (attribute(item, "AXURL") as? URL)?.absoluteString
+                        ?? text(item, "AXURL")
+                        ?? text(item, "AXDocument")
+                    guard let url else { return nil }
+                    return ["role": text(item, "AXRole") ?? "unknown",
+                            "identifier": text(item, "AXIdentifier") ?? "",
+                            "url": String(url.prefix(2048)),
+                            "selected": bool(item, "AXSelected") ?? true]
+                }
+            }
+            func exportBrowserMetadata(_ browser: AXUIElement) -> [String: Any] {
+                let supported = supportedAttributes(browser)
+                var result: [String: Any] = ["supported_attributes": supported]
+                for name in ["AXSelectedChildren", "AXSelectedRows"] where supported.contains(name) {
+                    result[name] = selectedURLMetadata(browser, attributeName: name, supported: supported)
+                }
+                if supported.contains("AXColumns"),
+                   let columns = attribute(browser, "AXColumns") as? [AXUIElement] {
+                    result["AXColumns_count"] = columns.count
+                    result["AXColumns"] = columns.prefix(16).enumerated().map { index, column in
+                        let columnAttributes = supportedAttributes(column)
+                        var selected: [String: Any] = ["index": index]
+                        for name in ["AXSelectedChildren", "AXSelectedRows"] where columnAttributes.contains(name) {
+                            selected[name] = selectedURLMetadata(column, attributeName: name,
+                                                                  supported: columnAttributes)
+                        }
+                        return selected
+                    }
+                }
+                return result
+            }
+            func walk(_ element: AXUIElement, depth: Int, path: String,
+                      inExportScenePanel: Bool = false) -> [String: Any] {
                 var node = scalarNode(element, path: path)
                 observation.nodes.append((element, node)); budget -= 1
+                if observation.nodes.count % 64 == 0 {
+                    progress("observe_tree_progress", details: ["nodes": observation.nodes.count])
+                }
                 // File chooser sidebars are unrelated to project/scene identity and include account locations.
                 let sidebar = node["role"] as? String == "AXOutline" && node["description"] as? String == "sidebar"
-                if depth < 12 && budget > 0 && !sidebar {
+                let exportScenePanel = inExportScenePanel
+                    || (node["role"] as? String == "AXWindow"
+                        && node["identifier"] as? String == "save-panel"
+                        && node["title"] as? String == "Export Scene")
+                let exportFileList = exportScenePanel && node["role"] as? String == "AXBrowser"
+                if exportFileList {
+                    node["children_omitted"] = "export_scene_file_list"
+                    node["native_selection_metadata"] = exportBrowserMetadata(element)
+                    observation.nodes[observation.nodes.count - 1].1 = node
+                } else if depth < 12 && budget > 0 && !sidebar {
                     var descendants: [[String: Any]] = []
                     for (index, child) in children(element).prefix(128).enumerated() {
                         if budget <= 0 { truncated = true; break }
-                        descendants.append(walk(child, depth: depth + 1, path: path + "/" + String(index)))
+                        descendants.append(walk(child, depth: depth + 1, path: path + "/" + String(index),
+                                                inExportScenePanel: exportScenePanel))
                     }
                     if !descendants.isEmpty { node["children"] = descendants }
                 } else if !children(element).isEmpty && !sidebar { truncated = true }
@@ -282,6 +377,8 @@ final class Observation {
             }
             state["windows"] = windows.prefix(8).enumerated().map { walk($0.element, depth: 0, path: "window/" + String($0.offset)) }
             state["tree_truncated"] = truncated || windows.count > 8
+            progress("observe_tree_complete", details: ["nodes": observation.nodes.count,
+                                                         "truncated": truncated || windows.count > 8])
             if let focused = observation.focusedWindow { state["focused_window"] = scalarNode(focused, path: "focused") }
             state["selected_elements"] = observation.nodes.map(\.1).filter { $0["selected"] as? Bool == true }
             var menus: [String: Any] = [:]
@@ -321,6 +418,7 @@ final class Observation {
                 state["menu_inventory_truncated"] = remaining == 0
             }
             do {
+                progress("project_handles_started")
                 let handles = try projectHandles(application.processIdentifier)
                 state["project_file_handles"] = handles
                 state["project_roots"] = Array(Set(handles.compactMap { path -> String? in
@@ -328,6 +426,7 @@ final class Observation {
                     return path.hasSuffix(".chproj") ? URL(fileURLWithPath: path).deletingLastPathComponent().path : nil
                 })).sorted()
                 state["project_documents"] = handles.filter { $0.hasSuffix(".chproj") }
+                progress("project_handles_complete", details: ["roots": (state["project_roots"] as? [String] ?? []).count])
             } catch {
                 state["project_roots"] = []
                 state["project_handle_error"] = "unavailable"
@@ -356,6 +455,8 @@ final class Observation {
             if !prompts.isEmpty { state["blocked_prompt"] = "Resolve the application prompt manually; this adapter will not authenticate or grant permissions" }
         }
         state["fingerprint"] = sha(try canonical(fingerprintValue(state))); observation.state = state; lastState = state
+        progress("observe_complete", details: ["focused_window": observation.focusedWindow != nil,
+                                                "node_count": observation.nodes.count])
         return observation
     }
     func expected(_ request: [String: Any], observation: Observation) throws {
@@ -391,6 +492,19 @@ final class Observation {
               let roots = observation.state["project_roots"] as? [String], roots == [requested] else {
             try fail("PROJECT_IDENTITY_UNAVAILABLE", "An explicit owned project root must match the sole native project-data handle root")
         }
+    }
+    func sameProcessAncestor(_ element: AXUIElement, ancestor: AXUIElement, pid: pid_t) -> Bool {
+        var elementPID: pid_t = 0
+        guard AXUIElementGetPid(element, &elementPID) == .success, elementPID == pid else { return false }
+        var parent = axElement(attribute(element, "AXParent"))
+        for _ in 0..<16 {
+            guard let current = parent else { return false }
+            var parentPID: pid_t = 0
+            guard AXUIElementGetPid(current, &parentPID) == .success, parentPID == pid else { return false }
+            if CFEqual(current, ancestor) { return true }
+            parent = axElement(attribute(current, "AXParent"))
+        }
+        return false
     }
     func openPreparedCopy(_ parameters: [String: Any], _ observation: Observation) async throws -> [String: Any] {
         guard observation.application == nil,
@@ -443,6 +557,93 @@ final class Observation {
                            "prepared_copy_id": preparedID, "project_root": root.path,
                            "process_id": Int(opened.processIdentifier),
                            "launch_time": opened.launchDate?.timeIntervalSince1970 ?? 0]]
+    }
+    func openAudioWav(_ parameters: [String: Any], _ observation: Observation) async throws -> [String: Any] {
+        guard let app = observation.application,
+              observation.state["running"] as? Bool == true,
+              observation.state["process_count"] as? Int == 1,
+              observation.state["bundle_id"] as? String == characterBundleID,
+              observation.state["application"] as? String == applicationURL.path,
+              observation.state["pid"] as? Int == Int(app.processIdentifier),
+              observation.state["launch_time"] as? Double
+                == app.launchDate?.timeIntervalSince1970,
+              app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL,
+              observation.state["authentication_or_permission_prompt"] as? Bool != true,
+              let root = parameters["project_root"] as? String,
+              observation.state["project_roots"] as? [String] == [root],
+              let sourcePath = parameters["source_path"] as? String,
+              let expectedHash = parameters["expected_sha256"] as? String,
+              expectedHash.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+            try fail("PRECONDITION_CHANGED", "WAV handoff requires the same running owned project without a prompt")
+        }
+        let source = URL(fileURLWithPath: sourcePath).standardizedFileURL
+        let importDirectory = source.deletingLastPathComponent()
+        let inputsDirectory = importDirectory.deletingLastPathComponent()
+        guard source.isFileURL, source.path == sourcePath, source.pathExtension.lowercased() == "wav",
+              importDirectory.lastPathComponent
+                .range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+              inputsDirectory.lastPathComponent == "inputs",
+              let importDirectoryAttributes = try? FileManager.default.attributesOfItem(atPath: importDirectory.path),
+              importDirectoryAttributes[.type] as? FileAttributeType == .typeDirectory,
+              (try? importDirectory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              let inputsDirectoryAttributes = try? FileManager.default.attributesOfItem(atPath: inputsDirectory.path),
+              inputsDirectoryAttributes[.type] as? FileAttributeType == .typeDirectory,
+              (try? inputsDirectory.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              let attributesBefore = try? FileManager.default.attributesOfItem(atPath: source.path),
+              attributesBefore[.type] as? FileAttributeType == .typeRegular,
+              (try? source.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+              let byteCount = (attributesBefore[.size] as? NSNumber)?.intValue,
+              byteCount > 0, byteCount <= 1_073_741_824,
+              let bytes = try? Data(contentsOf: source, options: [.mappedIfSafe]),
+              let attributesAfter = try? FileManager.default.attributesOfItem(atPath: source.path),
+              attributesBefore[.systemNumber] as? NSNumber == attributesAfter[.systemNumber] as? NSNumber,
+              attributesBefore[.systemFileNumber] as? NSNumber == attributesAfter[.systemFileNumber] as? NSNumber,
+              attributesBefore[.size] as? NSNumber == attributesAfter[.size] as? NSNumber,
+              attributesBefore[.modificationDate] as? Date == attributesAfter[.modificationDate] as? Date,
+              bytes.count == byteCount, sha(bytes) == expectedHash else {
+            try fail("INPUT_CHANGED", "The retained WAV does not match its hash-pinned private copy")
+        }
+        let instances = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+            .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+        guard instances.count == 1,
+              instances[0].processIdentifier == app.processIdentifier,
+              (instances[0].launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              app.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL else {
+            try fail("FOCUS_CHANGED", "The exact installed Character Animator process changed before WAV handoff")
+        }
+        phase = "audio_wav_handoff_dispatch"
+        dispatched = true
+        primaryCommandDispatched = true
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.promptsUserIfNeeded = false
+        configuration.activates = false
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        let opened = try await NSWorkspace.shared.open([source], withApplicationAt: applicationURL,
+                                                       configuration: configuration)
+        guard opened.bundleIdentifier == characterBundleID,
+              opened.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL,
+              opened.processIdentifier == app.processIdentifier,
+              (opened.launchDate?.timeIntervalSince1970 ?? 0) == (app.launchDate?.timeIntervalSince1970 ?? 0) else {
+            try fail("OPEN_IDENTITY_MISMATCH", "WAV handoff did not use the already-running Character Animator process")
+        }
+        let after = try observe()
+        guard after.application?.processIdentifier == app.processIdentifier,
+              (after.application?.launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              after.state["bundle_id"] as? String == characterBundleID,
+              after.state["application"] as? String == applicationURL.path,
+              after.state["process_count"] as? Int == 1,
+              after.state["project_roots"] as? [String] == [root],
+              after.state["authentication_or_permission_prompt"] as? Bool != true else {
+            try fail("PRECONDITION_CHANGED", "Character Animator process, project root or prompt state changed after WAV handoff")
+        }
+        return ["state": after.state,
+                "result": ["status": "native_audio_wav_handoff_requested", "completion": "unverified",
+                           "source_path": source.path, "sha256": expectedHash, "bytes": byteCount,
+                           "process_id": Int(app.processIdentifier),
+                           "launch_time": app.launchDate?.timeIntervalSince1970 ?? 0]]
     }
     func perform(_ element: AXUIElement, action: String = "AXPress") throws {
         guard actions(element).contains(action), bool(element, "AXEnabled") != false else { try fail("CONTROL_UNAVAILABLE", "Observed native control does not support this enabled action") }
@@ -551,23 +752,38 @@ final class Observation {
             try fail("FOCUS_CHANGED", "Chooser input requires existing event access and the observed foreground application")
         }
         let expectedFrame = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+        let expectedCenter = CGPoint(x: expectedFrame.midX, y: expectedFrame.midY)
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        guard let top = windows.first(where: { item in
+        let top = windows.first(where: { item in
                   // The system cursor is a visual plane, not a keyboard-input window.
                   if item[kCGWindowOwnerName as String] as? String == "Window Server",
                      item[kCGWindowLayer as String] as? Int == Int(CGWindowLevelForKey(.cursorWindow)) { return false }
                   guard (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                         let bounds = item[kCGWindowBounds as String] as? [String: Any],
                         let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                  return rect.intersects(expectedFrame)
-              }), top[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
+                  return rect.contains(expectedCenter)
+              })
+        let observedTopWindowID = (top?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let observedTopPID = top?[kCGWindowOwnerPID as String] as? Int
+        let observedTopOwner = (top?[kCGWindowOwnerName as String] as? String).map { String($0.prefix(128)) }
+        let observedTopFrame = (top?[kCGWindowBounds as String] as? [String: Any])
+            .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+            .map { [$0.minX, $0.minY, $0.width, $0.height] }
+        let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ownerText = observedTopOwner ?? "none"
+        let topPIDText = observedTopPID.map(String.init) ?? "none"
+        let topWindowIDText = observedTopWindowID.map(String.init) ?? "none"
+        let topFrameText = observedTopFrame.map { String(describing: $0) } ?? "none"
+        let foregroundPIDText = foregroundPID.map(String.init) ?? "none"
+        guard let top, observedTopPID == Int(app.processIdentifier),
               let bounds = top[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               abs(rect.minX - f[0]) <= 2, abs(rect.minY - f[1]) <= 2,
               abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2,
+              foregroundPID == app.processIdentifier,
               let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
-            try fail("FOCUS_CHANGED", "The exact observed chooser must be the topmost native window")
+            try fail("FOCUS_CHANGED", "The exact observed chooser must be the topmost native window (expected_frame=\(f), blocking_owner=\(ownerText), blocking_pid=\(topPIDText), blocking_window_id=\(topWindowIDText), blocking_frame=\(topFrameText), foreground_pid=\(foregroundPIDText), target_pid=\(app.processIdentifier))")
         }
         down.flags = flags; up.flags = flags
         dispatched = true
@@ -615,23 +831,148 @@ final class Observation {
         }
         return result
     }
+    func hasMatchingOnScreenWindow(_ root: AXUIElement, pid: pid_t,
+                                   only candidate: AXUIElement? = nil) -> Bool {
+        var windows = candidate.map { [$0] } ?? (attribute(root, "AXWindows") as? [AXUIElement] ?? [])
+        if candidate == nil, let focused = axElement(attribute(root, "AXFocusedWindow")),
+           !windows.contains(where: { CFEqual($0, focused) }) { windows.append(focused) }
+        let visible = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                 kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { window in
+            var windowPID: pid_t = 0
+            guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == pid,
+                  let f = frame(window) else { return false }
+            let matches = visible.filter { item in
+                guard item[kCGWindowOwnerPID as String] as? Int == Int(pid),
+                      (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                      item[kCGWindowIsOnscreen as String] as? Bool == true,
+                      let bounds = item[kCGWindowBounds as String] as? [String: Any],
+                      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
+                return abs(rect.minX - f[0]) <= 2 && abs(rect.minY - f[1]) <= 2
+                    && abs(rect.width - f[2]) <= 2 && abs(rect.height - f[3]) <= 2
+            }
+            return matches.count == 1
+        }
+    }
+    func missionControlSelectWindow(_ app: NSRunningApplication, roots: [String]) async throws {
+        let ready = try observe()
+        let runningTarget = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+            .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+        guard ready.application?.processIdentifier == app.processIdentifier,
+              (ready.application?.launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              ready.state["project_roots"] as? [String] == roots,
+              ready.state["authentication_or_permission_prompt"] as? Bool != true,
+              let targetRoot = ready.root,
+              runningTarget.count == 1, runningTarget[0].processIdentifier == app.processIdentifier,
+              (runningTarget[0].launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              ready.state["bundle_id"] as? String == characterBundleID,
+              ready.state["application"] as? String == applicationURL.path else {
+            try fail("FOCUS_CHANGED", "Mission Control fallback requires the same owned process with no matching on-screen window")
+        }
+        if ready.state["frontmost"] as? Bool == true,
+           bool(targetRoot, "AXFrontmost") == true,
+           hasMatchingOnScreenWindow(targetRoot, pid: app.processIdentifier) {
+            return
+        }
+        guard !hasMatchingOnScreenWindow(targetRoot, pid: app.processIdentifier) else {
+            try fail("FOCUS_CHANGED", "The owned window is visible but not frontmost")
+        }
+        let missionURL = URL(fileURLWithPath: "/System/Applications/Mission Control.app")
+            .standardizedFileURL.resolvingSymlinksInPath()
+        guard Bundle(url: missionURL)?.bundleIdentifier == "com.apple.exposelauncher" else {
+            try fail("FOCUS_UNAVAILABLE", "The installed Mission Control application is unavailable")
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.promptsUserIfNeeded = false
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        configuration.allowsRunningApplicationSubstitution = false
+        let mission = try await NSWorkspace.shared.openApplication(at: missionURL, configuration: configuration)
+        guard mission.bundleIdentifier == "com.apple.exposelauncher",
+              mission.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == missionURL,
+              mission.processIdentifier > 0 else {
+            try fail("FOCUS_UNAVAILABLE", "Mission Control did not open from its exact system application")
+        }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let afterOpen = try observe()
+        guard let afterOpenRoot = afterOpen.root else {
+            try fail("APPLICATION_UNAVAILABLE", "Character Animator disappeared while Mission Control opened")
+        }
+        guard afterOpen.application?.processIdentifier == app.processIdentifier,
+              (afterOpen.application?.launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              afterOpen.state["project_roots"] as? [String] == roots,
+              afterOpen.state["authentication_or_permission_prompt"] as? Bool != true,
+              afterOpen.state["application"] as? String == applicationURL.path,
+              !hasMatchingOnScreenWindow(afterOpenRoot, pid: app.processIdentifier),
+              afterOpen.application?.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL else {
+            try fail("FOCUS_CHANGED", "Character Animator identity or prompt state changed while Mission Control opened")
+        }
+        let docks = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
+        guard docks.count == 1 else { try fail("FOCUS_UNAVAILABLE", "The Dock process is unavailable or ambiguous") }
+        let dockRoot = AXUIElementCreateApplication(docks[0].processIdentifier)
+        let dockNodes = descendants(dockRoot)
+        guard dockNodes.count < 3000 else {
+            try fail("FOCUS_UNAVAILABLE", "Mission Control Dock window inventory is incomplete")
+        }
+        let groups = dockNodes.filter {
+            text($0, "AXIdentifier") == "mc.windows"
+        }
+        guard groups.count == 1 else {
+            try fail("FOCUS_UNAVAILABLE", "Mission Control did not expose one observed Dock windows group")
+        }
+        var groupPID: pid_t = 0
+        guard AXUIElementGetPid(groups[0], &groupPID) == .success, groupPID == docks[0].processIdentifier else {
+            try fail("FOCUS_UNAVAILABLE", "The Mission Control windows group is not owned by the Dock")
+        }
+        let windowNodes = descendants(groups[0], limit: 256)
+        guard windowNodes.count < 256 else {
+            try fail("FOCUS_UNAVAILABLE", "Mission Control window inventory is incomplete")
+        }
+        let buttons = windowNodes.filter {
+            text($0, "AXRole") == "AXButton" && text($0, "AXTitle") == "Adobe Character Animator 2026"
+        }
+        var buttonPID: pid_t = 0
+        guard buttons.count == 1, AXUIElementGetPid(buttons[0], &buttonPID) == .success,
+              buttonPID == docks[0].processIdentifier,
+              bool(buttons[0], "AXEnabled") == true, actions(buttons[0]).contains("AXPress") else {
+            try fail("FOCUS_UNAVAILABLE", "The exact Character Animator Mission Control window is absent or ambiguous")
+        }
+        let latestTarget = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+            .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+        guard latestTarget.count == 1, latestTarget[0].processIdentifier == app.processIdentifier,
+              (latestTarget[0].launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              afterOpen.state["authentication_or_permission_prompt"] as? Bool != true,
+              try projectHandles(app.processIdentifier) == roots else {
+            try fail("FOCUS_CHANGED", "Character Animator process, project or prompt state changed before window selection")
+        }
+        try perform(buttons[0])
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let after = try observe()
+        guard after.application?.processIdentifier == app.processIdentifier,
+              (after.application?.launchDate?.timeIntervalSince1970 ?? 0)
+                == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              after.state["project_roots"] as? [String] == roots,
+              after.state["authentication_or_permission_prompt"] as? Bool != true,
+              after.state["frontmost"] as? Bool == true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+              let afterRoot = after.root, bool(afterRoot, "AXFrontmost") == true,
+              hasMatchingOnScreenWindow(afterRoot, pid: app.processIdentifier) else {
+            try fail("FOCUS_CHANGED", "Mission Control selection did not expose the same Character Animator window on screen")
+        }
+    }
     func focusApplication(_ observation: Observation) async throws {
         guard let root = observation.root, let app = observation.application else { try fail("APPLICATION_UNAVAILABLE", "Character Animator is not running") }
         guard observation.state["authentication_or_permission_prompt"] as? Bool != true else {
             try fail("AUTHENTICATION_BOUNDARY", "Resolve the application prompt manually; no native input was sent")
         }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
-           bool(root, "AXFrontmost") == true, let focused = observation.focusedWindow, let f = frame(focused) {
-            let visible = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-            if visible.contains(where: { item in
-                guard item[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
-                      (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
-                      let bounds = item[kCGWindowBounds as String] as? [String: Any],
-                      let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                return abs(rect.minX - f[0]) <= 2 && abs(rect.minY - f[1]) <= 2
-                    && abs(rect.width - f[2]) <= 2 && abs(rect.height - f[3]) <= 2
-            }) { return }
-        }
+           bool(root, "AXFrontmost") == true,
+           let focused = observation.focusedWindow,
+           hasMatchingOnScreenWindow(root, pid: app.processIdentifier, only: focused) { return }
         var settable: DarwinBoolean = false
         guard AXUIElementIsAttributeSettable(root, "AXFrontmost" as CFString, &settable) == .success && settable.boolValue else { try fail("FOCUS_UNAVAILABLE", "Native AXFrontmost control is not settable") }
         phase = "focus_dispatch"; dispatched = true
@@ -669,7 +1010,10 @@ final class Observation {
             guard axRemaining > 0 else { break }
             AXUIElementSetMessagingTimeout(currentAXRoot, Float(min(0.75, axRemaining)))
             if currentWorkspacePID == app.processIdentifier,
-               bool(currentAXRoot, "AXFrontmost") == true { return }
+               bool(currentAXRoot, "AXFrontmost") == true {
+                if hasMatchingOnScreenWindow(currentAXRoot, pid: app.processIdentifier) { return }
+                break
+            }
             let sleepRemaining = deadline - ProcessInfo.processInfo.systemUptime
             guard sleepRemaining > 0 else { break }
             try await Task.sleep(nanoseconds: UInt64(min(0.1, sleepRemaining) * 1_000_000_000))
@@ -677,7 +1021,20 @@ final class Observation {
         let system = AXUIElementCreateSystemWide()
         var livePID: pid_t = 0
         if let focusedApp = axElement(attribute(system, "AXFocusedApplication")) { AXUIElementGetPid(focusedApp, &livePID) }
-        try fail("FOCUS_CHANGED", "Native foreground PID did not stabilize after the single activation (workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), accessibility=\(livePID), target=\(app.processIdentifier), app_frontmost=\(bool(AXUIElementCreateApplication(app.processIdentifier), "AXFrontmost") ?? false))")
+        let currentRoot = AXUIElementCreateApplication(app.processIdentifier)
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+           bool(currentRoot, "AXFrontmost") == true,
+           hasMatchingOnScreenWindow(currentRoot, pid: app.processIdentifier) {
+            return
+        }
+        if !hasMatchingOnScreenWindow(currentRoot, pid: app.processIdentifier) {
+            guard let roots = observation.state["project_roots"] as? [String], roots.count == 1 else {
+                try fail("PROJECT_IDENTITY_UNAVAILABLE", "Mission Control fallback requires the sole observed project root")
+            }
+            try await missionControlSelectWindow(app, roots: roots)
+            return
+        }
+        try fail("FOCUS_CHANGED", "Native foreground did not stabilize with the exact on-screen window (workspace=\(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0), accessibility=\(livePID), target=\(app.processIdentifier), app_frontmost=\(bool(currentRoot, "AXFrontmost") ?? false))")
     }
     func chooserDestination(_ initialObservation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
         var observation = initialObservation
@@ -713,7 +1070,23 @@ final class Observation {
             try fail("FOCUS_CHANGED", "Activation did not expose the same-process requested chooser without a prompt")
         }
         let originalPanel: AXUIElement
-        if let focused = activated.focusedWindow,
+        if kind == "export_png_wav" {
+            let exportPanels = activated.nodes.filter {
+                text($0.0, "AXIdentifier") == "save-panel"
+                    && text($0.0, "AXTitle") == "Export Scene"
+                    && text($0.0, "AXRole") == "AXWindow"
+                    && bool($0.0, "AXModal") == true
+            }
+            guard exportPanels.count == 1 else {
+                try fail("CHOOSER_MISMATCH", "The exact observed Export Scene save panel is absent or ambiguous")
+            }
+            var panelPID: pid_t = 0
+            guard AXUIElementGetPid(exportPanels[0].0, &panelPID) == .success,
+                  panelPID == originalPID else {
+                try fail("CHOOSER_MISMATCH", "The Export Scene save panel does not belong to the owned process")
+            }
+            originalPanel = exportPanels[0].0
+        } else if let focused = activated.focusedWindow,
            text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet" {
             originalPanel = focused
         } else {
@@ -739,10 +1112,26 @@ final class Observation {
         }
         try await Task.sleep(nanoseconds: 120_000_000)
         phase = "chooser_foreground"
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { try fail("FOCUS_CHANGED", "Character Animator is not frontmost; shortcut was not sent") }
+        let raised = try observe()
+        try ownedRoot(parameters, raised)
+        let raisedPanel = raised.nodes.filter {
+            CFEqual($0.0, originalPanel)
+                && text($0.0, "AXIdentifier") == (kind == "export_png_wav" ? "save-panel" : text(originalPanel, "AXIdentifier"))
+                && (kind != "export_png_wav" || text($0.0, "AXTitle") == "Export Scene")
+        }
+        guard raised.application?.processIdentifier == originalPID,
+              (raised.state["launch_time"] as? String) == originalLaunchTime,
+              raised.state["authentication_or_permission_prompt"] as? Bool != true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,
+              typedChooserIsFocused(raised, kind: kind),
+              hasOnlyExpectedChooserModal(raised, kind: kind),
+              raisedPanel.count == 1 else {
+            try fail("FOCUS_CHANGED", "The exact owned chooser did not remain observed after raising its window")
+        }
+        observation = raised
         // A single fixed Cocoa chooser shortcut, never a caller-selected key sequence.
         phase = "go_to_folder_shortcut"
-        try chooserKey(try observe(), key: 5, flags: [.maskCommand, .maskShift])
+        try chooserKey(observation, key: 5, flags: [.maskCommand, .maskShift])
         if kind == "import" || kind == "export_png_wav" {
             return ["status": "native_chooser_directory_requested", "directory": directory,
                     "basename": basename, "completion": "unverified", "retry_safe": false]
@@ -874,13 +1263,13 @@ final class Observation {
         return ["status": "native_chooser_submitted", "destination": destination.path, "completion": "unverified", "retry_safe": false]
     }
     func continueChooser(_ initial: Observation, parameters: [String: Any]) async throws -> [String: Any] {
+        progress("chooser_continuation_started")
         phase = "chooser_continue_preflight"
         guard let directory = parameters["directory"] as? String,
               let basename = parameters["basename"] as? String,
               let kind = parameters["kind"] as? String,
               ["import", "export_png_wav"].contains(kind),
               let app = initial.application,
-              typedChooserIsObserved(initial, kind: kind),
               hasOnlyExpectedChooserModal(initial, kind: kind),
               initial.state["authentication_or_permission_prompt"] as? Bool != true else {
             try fail("CHOOSER_MISMATCH", "Continue requires the exact existing typed chooser without an unrelated modal or prompt")
@@ -899,7 +1288,6 @@ final class Observation {
         if kind == "export_png_wav" {
             try verifyExportDirectory(parameters, directory: targetDirectory, basename: basename)
         }
-
         func verify(_ current: Observation) throws {
             try ownedRoot(parameters, current)
             guard current.application?.processIdentifier == originalPID,
@@ -910,11 +1298,25 @@ final class Observation {
                 try fail("CHOOSER_MISMATCH", "The same owned process and typed chooser must remain active without a prompt")
             }
         }
+        var directoryNavigationProved = false
         func isDirectoryReady(_ current: Observation) -> Bool {
-            guard typedChooserIsFocused(current, kind: kind),
+            guard typedChooserIsFocused(current, kind: kind) else { return false }
+            if kind == "export_png_wav",
+               current.focusedWindow.map({ text($0, "AXIdentifier") }) != "save-panel"
+                || current.focusedWindow.map({ text($0, "AXTitle") }) != "Export Scene"
+                || current.focusedWindow.map({ bool($0, "AXModal") }) != true {
+                return false
+            }
+            guard
                   let whereNode = current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" }),
-                  whereNode.1["value"] as? String == targetDirectory.lastPathComponent,
-                  (whereNode.1["url"] as? String).flatMap(URL.init(string:)).map({ $0.standardizedFileURL.path == directory }) ?? false else { return false }
+                  whereNode.1["value"] as? String == targetDirectory.lastPathComponent else { return false }
+            if let whereURL = whereNode.1["url"] as? String {
+                guard let parsed = URL(string: whereURL), parsed.standardizedFileURL.path == directory else { return false }
+            } else if kind == "export_png_wav" {
+                guard directoryNavigationProved else { return false }
+            } else {
+                return false
+            }
             if kind == "export_png_wav" {
                 return true
             }
@@ -931,6 +1333,7 @@ final class Observation {
                 } == true
         }
         func settle(_ stage: String, ready: (Observation) -> Bool) async throws -> Observation {
+            progress("settle_started", details: ["stage": stage])
             let deadline = ProcessInfo.processInfo.systemUptime + 5
             var previous: String?
             var observations = 0
@@ -948,6 +1351,9 @@ final class Observation {
                 continuationDiagnostics = ["stage": stage, "last_ready": lastReady,
                                            "fingerprint_stable": fingerprintStable,
                                            "observations": observations]
+                progress("settle_observation", details: ["stage": stage, "ready": lastReady,
+                                                          "fingerprint_stable": fingerprintStable,
+                                                          "observations": observations])
                 if lastReady && fingerprintStable { return current }
                 previous = fingerprint
                 let remaining = deadline - ProcessInfo.processInfo.systemUptime
@@ -957,8 +1363,37 @@ final class Observation {
         }
 
         var current = initial
+        if kind == "export_png_wav",
+           current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel",
+           !isDirectoryReady(current) {
+            let disclosures = current.nodes.filter {
+                text($0.0, "AXIdentifier") == "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"
+                    && text($0.0, "AXDescription") == "show more options"
+                    && actions($0.0).contains("AXPress")
+            }
+            if disclosures.count == 1 {
+                try verify(current)
+                let savePanel = try panel(current, kind: kind)
+                guard sameProcessAncestor(disclosures[0].0, ancestor: savePanel, pid: originalPID),
+                      bool(disclosures[0].0, "AXEnabled") == true else {
+                    try fail("CHOOSER_MISMATCH", "The observed disclosure is not enabled inside the exact Export Scene chooser")
+                }
+                try verifyTopmostChooser(current, window: savePanel)
+                try perform(disclosures[0].0)
+                current = try observe()
+                try verify(current)
+                guard current.state["tree_truncated"] as? Bool == false,
+                      typedChooserIsFocused(current, kind: kind),
+                      current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel" else {
+                    try fail("CHOOSER_MISMATCH", "The same Export Scene chooser was not observed after expanding its folder controls")
+                }
+            }
+        }
+        progress("chooser_initial_state", details: ["directory_ready": isDirectoryReady(current),
+                                                     "focused_identifier": current.focusedWindow.flatMap { text($0, "AXIdentifier") } ?? "none"])
         if !isDirectoryReady(current) {
             if current.focusedWindow.map({ text($0, "AXIdentifier") }) != "GoToWindow" {
+                progress("directory_navigation_started")
                 let opened = try await chooserDestination(current, parameters: parameters)
                 guard opened["status"] as? String == "native_chooser_directory_requested" else {
                     try fail("CHOOSER_MISMATCH", "Chooser directory navigation did not reach its recorded stage")
@@ -969,7 +1404,14 @@ final class Observation {
                 guard current.focusedWindow.map({ text($0, "AXIdentifier") }) == "GoToWindow" else {
                     try fail("CHOOSER_MISMATCH", "The exact typed chooser or its parented Go To sheet is required")
                 }
-                _ = try await continueDirectoryEntry(current, parameters: parameters)
+                let navigation = try await continueDirectoryEntry(current, parameters: parameters)
+                guard navigation["status"] as? String == "native_directory_requested",
+                      navigation["directory"] as? String == directory,
+                      navigation["filename"] as? String == basename else {
+                    try fail("DIRECTORY_NOT_OBSERVED", "Exact absolute folder navigation was not acknowledged by the native chooser")
+                }
+                directoryNavigationProved = true
+                progress("target_directory_entry_submitted")
                 current = try await settle("target_directory") { isDirectoryReady($0) }
             }
         }
@@ -980,7 +1422,13 @@ final class Observation {
         guard result["status"] as? String == "native_chooser_submitted" else {
             try fail("CHOOSER_NOT_SUBMITTED", "The exact observed chooser destination was not submitted")
         }
-        return result
+        var finalResult = result
+        if kind == "export_png_wav" {
+            let observedWhereURL = current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" })?.1["url"] as? String
+            finalResult["directory_evidence_source"] = observedWhereURL == nil
+                ? "observed_absolute_go_to_navigation" : "native_where_url"
+        }
+        return finalResult
     }
 
     func verifyExportDirectory(_ parameters: [String: Any], directory: URL, basename: String) throws {
@@ -1005,21 +1453,36 @@ final class Observation {
             try fail("FOCUS_CHANGED", "The exact foreground chooser is required immediately before submission")
         }
         let expectedFrame = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+        let expectedCenter = CGPoint(x: expectedFrame.midX, y: expectedFrame.midY)
         let serverWindows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                         kCGNullWindowID) as? [[String: Any]] ?? []
-        guard let top = serverWindows.first(where: { item in
+        let top = serverWindows.first(where: { item in
                   if item[kCGWindowOwnerName as String] as? String == "Window Server",
                      item[kCGWindowLayer as String] as? Int == Int(CGWindowLevelForKey(.cursorWindow)) { return false }
                   guard (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                         let bounds = item[kCGWindowBounds as String] as? [String: Any],
                         let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                  return rect.intersects(expectedFrame)
-              }), top[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
+                  return rect.contains(expectedCenter)
+              })
+        let observedTopWindowID = (top?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let observedTopPID = top?[kCGWindowOwnerPID as String] as? Int
+        let observedTopOwner = (top?[kCGWindowOwnerName as String] as? String).map { String($0.prefix(128)) }
+        let observedTopFrame = (top?[kCGWindowBounds as String] as? [String: Any])
+            .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+            .map { [$0.minX, $0.minY, $0.width, $0.height] }
+        let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ownerText = observedTopOwner ?? "none"
+        let topPIDText = observedTopPID.map(String.init) ?? "none"
+        let topWindowIDText = observedTopWindowID.map(String.init) ?? "none"
+        let topFrameText = observedTopFrame.map { String(describing: $0) } ?? "none"
+        let foregroundPIDText = foregroundPID.map(String.init) ?? "none"
+        guard let top, observedTopPID == Int(app.processIdentifier),
               let bounds = top[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               abs(rect.minX - f[0]) <= 2, abs(rect.minY - f[1]) <= 2,
-              abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2 else {
-            try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window")
+              abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2,
+              foregroundPID == app.processIdentifier else {
+            try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window (expected_frame=\(f), blocking_owner=\(ownerText), blocking_pid=\(topPIDText), blocking_window_id=\(topWindowIDText), blocking_frame=\(topFrameText), foreground_pid=\(foregroundPIDText), target_pid=\(app.processIdentifier))")
         }
     }
     func continueDirectoryEntry(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
@@ -1042,12 +1505,14 @@ final class Observation {
             try fail("INVALID_DESTINATION", "Native chooser path does not match the requested existing input or new project")
         }
         try ownedRoot(parameters, observation)
-        if let sheetElement = observation.focusedWindow,
-           text(sheetElement, "AXIdentifier") == "GoToWindow",
-           text(sheetElement, "AXRole") == "AXSheet",
+        var goToSheet: AXUIElement?
+        if let focused = observation.focusedWindow,
+           text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet" {
+            goToSheet = focused
+        }
+        if let sheetElement = goToSheet,
            let sheet = observation.nodes.first(where: { CFEqual($0.0, sheetElement) }),
-           let sheetPath = sheet.1["path"] as? String,
-           let sheetFrame = frame(sheetElement) {
+           let sheetPath = sheet.1["path"] as? String {
             let matchingSheets = observation.nodes.filter {
                 text($0.0, "AXIdentifier") == "GoToWindow" && text($0.0, "AXRole") == "AXSheet"
                     && CFEqual($0.0, sheetElement)
@@ -1067,6 +1532,9 @@ final class Observation {
             guard fields.count == 1 else {
                 try fail("CHOOSER_MISMATCH", "The focused Go To sheet path field is absent or ambiguous")
             }
+            guard let sheetFrame = frame(sheetElement) else {
+                try fail("CHOOSER_MISMATCH", "The observed Go To sheet bounds are unavailable")
+            }
             phase = "directory_focus"
             try await focusApplication(observation)
             try perform(sheetElement, action: "AXRaise")
@@ -1083,9 +1551,11 @@ final class Observation {
             for _ in 0..<15 {
                 try await Task.sleep(nanoseconds: 100_000_000)
                 let current = try observe()
-                guard current.state["authentication_or_permission_prompt"] as? Bool != true,
-                      NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
-                    try fail("AUTHENTICATION_BOUNDARY", "A prompt or foreground change interrupted Go To focus")
+                guard current.state["authentication_or_permission_prompt"] as? Bool != true else {
+                    try fail("AUTHENTICATION_BOUNDARY", "An application prompt interrupted Go To focus")
+                }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else {
+                    try fail("FOCUS_CHANGED", "The foreground application changed during Go To focus")
                 }
                 if let focused = current.focusedWindow,
                    text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet",
@@ -1137,7 +1607,10 @@ final class Observation {
                 return rect.contains(center)
             }
             guard topmostAtSheet?[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier) else {
-                try fail("FOCUS_CHANGED", "The focused Go To sheet is not the topmost visible Character Animator window")
+                let blockingPID = topmostAtSheet?[kCGWindowOwnerPID as String] as? Int
+                let blockingOwner = (topmostAtSheet?[kCGWindowOwnerName as String] as? String)
+                    .map { String($0.prefix(128)) } ?? "unknown"
+                try fail("FOCUS_CHANGED", "The focused Go To sheet is not topmost (expected_pid=\(app.processIdentifier), blocking_pid=\(blockingPID.map(String.init) ?? "none"), blocking_owner=\(blockingOwner))")
             }
             dispatched = true
             guard AXUIElementSetAttributeValue(activeField, "AXFocused" as CFString, kCFBooleanTrue) == .success,
@@ -1159,8 +1632,11 @@ final class Observation {
             }
             try ownedRoot(parameters, observation)
         }
+        func chooserPanel(_ current: Observation) throws -> AXUIElement {
+            try panel(current, kind: kind)
+        }
         func submitSave(_ panelState: Observation) async throws -> [String: Any] {
-            _ = try panel(panelState, kind: kind)
+            _ = try chooserPanel(panelState)
             try await focusApplication(panelState)
             guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                   panelState.state["authentication_or_permission_prompt"] as? Bool != true else {
@@ -1168,12 +1644,15 @@ final class Observation {
             }
             var expanded = panelState
             if !expanded.nodes.contains(where: { $0.1["identifier"] as? String == "where popup" }) {
-                try perform(try node(expanded, identifier: "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"))
+                let disclosure = try node(expanded, identifier: "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE")
+                try perform(disclosure)
                 try await Task.sleep(nanoseconds: 120_000_000)
                 expanded = try observe()
             }
-            _ = try panel(expanded, kind: kind)
-            let whereNodes = expanded.nodes.filter { $0.1["identifier"] as? String == "where popup" }
+            _ = try chooserPanel(expanded)
+            let whereNodes = expanded.nodes.filter {
+                $0.1["identifier"] as? String == "where popup"
+            }
             guard whereNodes.count == 1,
                   whereNodes[0].1["value"] as? String == directoryURL.lastPathComponent,
                   ((whereNodes[0].1["url"] as? String).flatMap(URL.init(string:)).map({ $0.standardizedFileURL.path == directory }) ?? true) else {
@@ -1200,7 +1679,7 @@ final class Observation {
                 guard selected.state["authentication_or_permission_prompt"] as? Bool != true else {
                     try fail("AUTHENTICATION_BOUNDARY", "A prompt interrupted native import selection")
                 }
-                _ = try panel(selected, kind: "import")
+                _ = try chooserPanel(selected)
                 let button = try node(selected, identifier: "OKButton", role: "AXButton")
                 guard text(button, "AXTitle") == "Import", bool(button, "AXEnabled") == true else {
                     try fail("INPUT_NOT_OBSERVED", "Native import selection did not enable its observed Import control")
@@ -1228,12 +1707,13 @@ final class Observation {
                     try fail("PRECONDITION_CHANGED", "The same foreground process and owned project are required immediately before Import")
                 }
                 let submitReady = try observe()
+                try ownedRoot(parameters, submitReady)
                 guard submitReady.state["fingerprint"] as? String == selected.state["fingerprint"] as? String,
                       submitReady.application?.processIdentifier == app.processIdentifier,
                       submitReady.state["authentication_or_permission_prompt"] as? Bool != true,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
                       submitReady.state["project_roots"] as? [String] == [parameters["project_root"] as? String ?? ""],
-                      (try? panel(submitReady, kind: "import")) != nil else {
+                      (try? chooserPanel(submitReady)) != nil else {
                     try fail("PRECONDITION_CHANGED", "The exact selected Import panel changed during source verification")
                 }
                 let readyButton = try node(submitReady, identifier: "OKButton", role: "AXButton")
@@ -1249,7 +1729,11 @@ final class Observation {
                 try verifyTopmostChooser(submitReady, window: panel(submitReady, kind: "import"))
                 phase = "import_dispatch"
                 submissionMayHaveStarted = true
+                progress("import_submit_write_ahead", details: [
+                    "submission_may_have_started": true, "selected_path": selectedURL.path,
+                ], sync: true)
                 try perform(readyButton)
+                progress("import_submit_acknowledged")
                 return ["status": "native_chooser_submitted", "destination": selectedURL.path,
                         "completion": "unverified", "retry_safe": false]
             }
@@ -1277,7 +1761,11 @@ final class Observation {
             try verifyTopmostChooser(ready, window: try panel(ready, kind: kind))
             phase = "save_dispatch"
             submissionMayHaveStarted = true
+            progress("save_submit_write_ahead", details: [
+                "submission_may_have_started": true, "kind": kind,
+            ], sync: true)
             try perform(saveButton)
+            progress("save_submit_acknowledged")
             return ["status": "native_chooser_submitted", "destination": directoryURL.appendingPathComponent(basename).path,
                     "directory": directory, "filename": basename, "completion": "unverified", "retry_safe": false]
         }
@@ -1383,15 +1871,21 @@ final class Observation {
                   let rect = CGRect(dictionaryRepresentation: rectData as CFDictionary) else { return false }
             return rect.contains(point)
         }
+        let observedTopmostWindowID = (topmost?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let observedTopmostPID = topmost?[kCGWindowOwnerPID as String] as? Int
+        let liveForegroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let observedTopmostWindowText = observedTopmostWindowID.map(String.init) ?? "nil"
+        let observedTopmostPIDText = observedTopmostPID.map(String.init) ?? "nil"
+        let liveForegroundPIDText = liveForegroundPID.map(String.init) ?? "nil"
         guard (topmost?[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID,
-              topmost?[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+              observedTopmostPID == Int(app.processIdentifier),
+              liveForegroundPID == app.processIdentifier,
               CGPreflightPostEventAccess(), current.state["authentication_or_permission_prompt"] as? Bool != true,
               let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown,
                                  mouseCursorPosition: point, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp,
                                mouseCursorPosition: point, mouseButton: .left) else {
-            try fail("FOCUS_CHANGED", "OCR-selected Project row is not under the exact visible Character Animator window")
+            try fail("FOCUS_CHANGED", "OCR-selected Project row is not under the exact visible Character Animator window (expectedWindowID=\(windowID), topmostWindowID=\(observedTopmostWindowText), topmostPID=\(observedTopmostPIDText), foregroundPID=\(liveForegroundPIDText), targetPID=\(app.processIdentifier))")
         }
         if extend { down.flags = [.maskCommand]; up.flags = [.maskCommand] }
         phase = "project_select_dispatch"
@@ -1417,6 +1911,17 @@ final class Observation {
     func run(_ request: [String: Any]) async throws -> [String: Any] {
         guard let operation = request["operation"] as? String else { try fail("INVALID_ARGUMENT", "operation is required") }
         let parameters = request["parameters"] as? [String: Any] ?? [:]
+        if operation == "continue_chooser",
+           let trace = parameters["native_trace"] as? [String: Any],
+           let attempt = trace["attempt_id"] as? String,
+           attempt.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+            traceAttemptID = attempt
+            if let operationID = trace["operation_id"] as? String,
+               operationID.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+                traceOperationID = operationID
+            }
+            progress("request_started")
+        }
         phase = "observation"
         let observation = try observe(full: operation != "status")
         if operation == "status" || operation == "inspect" { return ["state": observation.state, "result": ["status": "observed"]] }
@@ -1426,10 +1931,13 @@ final class Observation {
             return ["state": observation.state, "result": try await capture(observation, parameters: parameters)]
         }
         phase = "precondition"
-        if operation == "focus" {
+        if operation == "focus" || operation == "continue_chooser" {
             try expectedFocusIdentity(request, observation: observation)
         } else {
             try expected(request, observation: observation)
+        }
+        if operation == "open_audio_wav" {
+            return try await openAudioWav(parameters, observation)
         }
         if operation == "chooser_continue_directory" {
             let result = try await continueDirectoryEntry(observation, parameters: parameters)
@@ -1475,28 +1983,28 @@ final class Observation {
                   ready.focusedWindow.map({ bool($0, "AXModal") == true }) != true else {
                 try fail("UNEXPECTED_MODAL", "A prompt or modal interrupted native menu activation")
             }
-            // Activation intentionally changes frontmost and hidden. Every other observed
-            // precondition must remain identical, and the target must now be active.
-            var activatedState = observation.state
-            activatedState.removeValue(forKey: "fingerprint")
-            activatedState["frontmost"] = true
-            activatedState["hidden"] = false
-            if observation.focusedWindow == nil && safeBackgroundMain(observation) {
-                let canvases = observation.nodes.filter { element, _ in
-                    text(element, "AXRole") == "AXLayoutArea"
-                        && text(element, "AXTitle") != nil && frame(element) != nil
-                        && bool(element, "AXModal") != true
+                // Activation intentionally changes frontmost and hidden. Every other observed
+                // precondition must remain identical, and the target must now be active.
+                var activatedState = observation.state
+                activatedState.removeValue(forKey: "fingerprint")
+                activatedState["frontmost"] = true
+                activatedState["hidden"] = false
+                if observation.focusedWindow == nil && safeBackgroundMain(observation) {
+                    let canvases = observation.nodes.filter { element, _ in
+                        text(element, "AXRole") == "AXLayoutArea"
+                            && text(element, "AXTitle") != nil && frame(element) != nil
+                            && bool(element, "AXModal") != true
+                    }
+                    if canvases.count == 1, let focused = ready.focusedWindow,
+                       CFEqual(focused, canvases[0].0) {
+                        activatedState["focused_window"] = ready.state["focused_window"]
+                    }
                 }
-                if canvases.count == 1, let focused = ready.focusedWindow,
-                   CFEqual(focused, canvases[0].0) {
-                    activatedState["focused_window"] = ready.state["focused_window"]
+                guard ready.state["frontmost"] as? Bool == true,
+                      ready.state["fingerprint"] as? String == sha(try canonical(fingerprintValue(activatedState))) else {
+                    try fail("STALE_STATE", "Native state changed during activation; inspect the current selection before dispatch")
                 }
-            }
-            guard ready.state["frontmost"] as? Bool == true,
-                  ready.state["fingerprint"] as? String == sha(try canonical(fingerprintValue(activatedState))) else {
-                try fail("STALE_STATE", "Native state changed during activation; inspect the current selection before dispatch")
-            }
-            guard let command = ready.menuElements[operation] else { try fail("CAPABILITY_UNAVAILABLE", "Native command is not exposed in this application version") }
+                guard let command = ready.menuElements[operation] else { try fail("CAPABILITY_UNAVAILABLE", "Native command is not exposed in this application version") }
             phase = "menu_dispatch"
             try perform(command)
         } else if operation == "chooser_destination" {
@@ -1571,6 +2079,32 @@ Task { @MainActor in
         FileHandle.standardOutput.write(try canonical(envelope)); FileHandle.standardOutput.write(Data([10]))
     } catch {
         let known = error as? NativeFailure
+        if operation == "continue_chooser" {
+            var failureDetails: [String: Any] = [
+                "phase": adapter?.phase ?? "unknown",
+                "native_code": known?.code ?? "NATIVE_INSPECTION_FAILED",
+                "submission_may_have_started": adapter?.submissionMayHaveStarted ?? false,
+                "targeted_confirmation_may_have_started": adapter?.targetedConfirmationMayHaveStarted ?? false,
+                "targeted_navigation_may_have_started": adapter?.targetedNavigationMayHaveStarted ?? false,
+            ]
+            if let foreground = NSWorkspace.shared.frontmostApplication {
+                failureDetails["foreground_pid"] = Int(foreground.processIdentifier)
+                failureDetails["foreground_bundle_id"] = String((foreground.bundleIdentifier ?? "unknown").prefix(128))
+                failureDetails["foreground_name"] = String((foreground.localizedName ?? "unknown").prefix(128))
+            } else {
+                failureDetails["foreground_pid"] = NSNull()
+                failureDetails["foreground_bundle_id"] = NSNull()
+                failureDetails["foreground_name"] = NSNull()
+            }
+            if let lastState = adapter?.lastState {
+                failureDetails["target_pid"] = lastState["pid"] ?? NSNull()
+                failureDetails["last_observed_prompt"] = lastState["authentication_or_permission_prompt"] ?? NSNull()
+            } else {
+                failureDetails["target_pid"] = NSNull()
+                failureDetails["last_observed_prompt"] = NSNull()
+            }
+            adapter?.progress("native_failure", details: failureDetails, sync: true)
+        }
         let unknown = commandPaths[operation] != nil || operation == "project_select"
             ? adapter?.primaryCommandDispatched == true : adapter?.dispatched == true
         var errorEnvelope: [String: Any] = ["code": unknown ? "OUTCOME_UNKNOWN" : known?.code ?? "NATIVE_INSPECTION_FAILED",
@@ -1580,6 +2114,8 @@ Task { @MainActor in
             "outcome": unknown ? "unknown" : "rejected", "retry_safe": false]
         if operation == "continue_chooser" {
             errorEnvelope["submission_may_have_started"] = adapter?.submissionMayHaveStarted ?? false
+            errorEnvelope["targeted_confirmation_may_have_started"] = adapter?.targetedConfirmationMayHaveStarted ?? false
+            errorEnvelope["targeted_navigation_may_have_started"] = adapter?.targetedNavigationMayHaveStarted ?? false
             if let diagnostics = adapter?.continuationDiagnostics {
                 errorEnvelope["continuation_diagnostics"] = diagnostics
             }

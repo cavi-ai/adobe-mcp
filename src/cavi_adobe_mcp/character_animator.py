@@ -39,6 +39,8 @@ def _may_resume_atomic_continuation(packet):
     context = packet.get("native_continuation")
     return (isinstance(context, dict)
             and context.get("submission_may_have_started") is False
+            and context.get("targeted_confirmation_may_have_started") is False
+            and context.get("targeted_navigation_may_have_started") is False
             and isinstance(context.get("phase"), str) and bool(context["phase"]))
 
 
@@ -163,17 +165,25 @@ class CharacterAnimator:
                 lease = {**lease, "lease_id": uuid.uuid4().hex,
                          "project_id": identity, "expires_at": time.time() + ttl_seconds}
                 write_json(self.directory / "lease.json", lease)
-            elif action in ("renew", "release"):
+            elif action == "renew":
                 if (not active or lease_id != lease["lease_id"] or identity != lease["project_id"]):
                     raise CharacterRejected("Lease is expired, stale or owned by another caller")
-                if action == "release":
-                    if observed["pending_operation"]:
-                        raise CharacterRejected("Inspect and resolve the pending operation before releasing ownership")
-                    (self.directory / "lease.json").unlink()
-                    lease = None
+                lease["expires_at"] = time.time() + ttl_seconds
+                write_json(self.directory / "lease.json", lease)
+            elif action == "release":
+                if lease is None or lease_id != lease.get("lease_id"):
+                    raise CharacterRejected("Lease is expired, stale or owned by another caller")
+                if observed["pending_operation"]:
+                    raise CharacterRejected("Inspect and resolve the pending operation before releasing ownership")
+                if not active or identity != lease.get("project_id"):
+                    self._release_owned_lease_after_exit(lease, observed, cancelled)
+                    identity = lease["project_id"]
                 else:
-                    lease["expires_at"] = time.time() + ttl_seconds
-                    write_json(self.directory / "lease.json", lease)
+                    current = self.read("lease.json")
+                    if current != lease or self.read("operation.json") is not None:
+                        raise CharacterRejected("Lease or operation state changed before release")
+                (self.directory / "lease.json").unlink()
+                lease = None
             result = {"project_id": identity, "owner": lease["owner"] if lease else None,
                       "expires_at": lease["expires_at"] if lease else None,
                       "state": "owned" if lease and lease["expires_at"] > time.time() else "unclaimed",
@@ -184,6 +194,47 @@ class CharacterAnimator:
             if action in ("claim", "renew", "resume"):
                 result["lease_id"] = lease["lease_id"]
             return result
+
+    def _release_owned_lease_after_exit(self, lease, first_observation, cancelled):
+        """Release one matching owned-copy lease only after stable native process absence."""
+        root_value = lease.get("owned_root") if isinstance(lease, dict) else None
+        root_identity = lease.get("owned_root_identity") if isinstance(lease, dict) else None
+        if (not isinstance(lease.get("owner"), str) or not lease["owner"]
+                or not isinstance(lease.get("project_id"), str) or not lease["project_id"]
+                or not isinstance(root_value, str) or not root_value
+                or not isinstance(root_identity, dict)):
+            raise CharacterRejected("Stopped-app release requires a first-hand owned project root")
+        root = self.path(root_value)
+        if not root.is_dir() or root.is_symlink() or self._directory_identity(root) != root_identity:
+            raise CharacterRejected("The owned project root identity changed; the lease remains retained")
+
+        def stopped(state):
+            return (isinstance(state, dict)
+                    and state.get("bundle_id") == CHARACTER_BUNDLE_ID
+                    and isinstance(state.get("application"), str)
+                    and Path(state["application"]).is_absolute()
+                    and state.get("running") is False
+                    and type(state.get("process_count")) is int and state["process_count"] == 0
+                    and type(state.get("bundle_process_count")) is int
+                    and state["bundle_process_count"] == 0
+                    and state.get("pid") is None and state.get("launch_time") is None
+                    and state.get("project_roots") in (None, [])
+                    and state.get("authentication_or_permission_prompt") is not True)
+
+        first_state = first_observation.get("native", {}).get("state", {})
+        first_fingerprint = first_state.get("fingerprint")
+        if (not stopped(first_state) or not isinstance(first_fingerprint, str)
+                or not first_fingerprint or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Owned lease release requires a stopped app and unchanged project root")
+        second = self.bridge.call("inspect", cancelled=cancelled)
+        second_state = second.get("state", {})
+        if (not stopped(second_state) or second_state.get("fingerprint") != first_fingerprint
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Owned lease release requires two stable stopped-app observations")
+        current_lease = self.read("lease.json")
+        if (current_lease != lease or self.read("operation.json") is not None
+                or self._directory_identity(root) != root_identity):
+            raise CharacterRejected("Lease or pending operation changed before stopped-app release")
 
     def path(self, value, *, new=False):
         if (not isinstance(value, str) or not value or any(ord(c) < 32 for c in value)
@@ -618,7 +669,7 @@ class CharacterAnimator:
 
     def mutate(self, operation, parameters, lease_id, *, owned=True, cancelled=None,
                continuation=None, intent=None, expected_fingerprint=None,
-               adopt_existing_import=False):
+               adopt_existing_import=False, native_operation=None):
         """Record uncertainty before dispatch; no implicit retry or journal clearing."""
         with self.locked(cancelled):
             before = self.inspect(cancelled)
@@ -645,7 +696,11 @@ class CharacterAnimator:
             if len(roots) != 1:
                 raise CharacterRejected("Exactly one observed native project root is required")
             parameters = {**parameters, "project_root": roots[0]}
-            initial_native_operation = operation
+            initial_native_operation = native_operation or operation
+            if (initial_native_operation == "open_audio_wav"
+                    and (before["native"]["state"].get("running") is not True
+                         or before["native"]["state"].get("process_count") != 1)):
+                initial_native_operation = operation
             if operation == "import" and adopt_existing_import:
                 state = before["native"]["state"]
                 focus = state.get("focused_window") or {}
@@ -688,7 +743,7 @@ class CharacterAnimator:
             write_json(journal, packet)
             dispatched = 0
             try:
-                native_command = "inspect" if initial_native_operation == "inspect_existing_import" else operation
+                native_command = "inspect" if initial_native_operation == "inspect_existing_import" else initial_native_operation
                 native = (self.bridge.call("inspect", cancelled=cancelled) if native_command == "inspect"
                           else self.bridge.call(native_command, parameters,
                                                expected=before["native"]["state"], cancelled=cancelled))
@@ -700,6 +755,7 @@ class CharacterAnimator:
                         nonlocal native, dispatched
                         if command == "continue_chooser":
                             current = native
+                            arguments = {**arguments, "operation_id": operation_id}
                             packet.pop("native_continuation", None)
                             packet.update(atomic_continuation_attempted=True)
                             write_json(journal, packet)
@@ -832,7 +888,7 @@ class CharacterAnimator:
         return selected
 
     def import_media(self, source, kind, lease_id, cancelled=None):
-        """Import one immutable workspace PSD/WAV through the observed native file chooser."""
+        """Submit a hash-pinned PSD through Import or hand a WAV copy to the running app."""
         extensions = {"puppet_psd": ".psd", "audio_wav": ".wav"}
         if kind not in extensions:
             raise CharacterRejected("Choose puppet_psd or audio_wav")
@@ -868,14 +924,23 @@ class CharacterAnimator:
             roots = native["state"].get("project_roots", [])
             if len(roots) != 1 or roots[0] != lease.get("owned_root"):
                 raise CharacterUnknown("Import requires the exact owned project root")
-            arguments = {"kind": "import", "directory": str(staged.parent),
-                         "basename": staged.name, "project_root": roots[0],
-                         "expected_sha256": staged_digest}
-            selected = step("continue_chooser", arguments)
-            if selected.get("result", {}).get("status") != "native_chooser_submitted":
-                raise CharacterUnknown("Native import chooser was not submitted")
-            after = selected
-            if project_identity(after["state"]) != project_identity(selected["state"]):
+            if (kind == "audio_wav"
+                    and native.get("operation") == "open_audio_wav"):
+                state = native["state"]
+                if (native.get("result", {}).get("status") != "native_audio_wav_handoff_requested"
+                        or project_identity(state) != lease.get("project_id")
+                        or state.get("authentication_or_permission_prompt") is True):
+                    raise CharacterUnknown("The WAV handoff was not verified against the same owned project")
+                after = native
+            else:
+                arguments = {"kind": "import", "directory": str(staged.parent),
+                             "basename": staged.name, "project_root": roots[0],
+                             "expected_sha256": staged_digest}
+                selected = step("continue_chooser", arguments)
+                if selected.get("result", {}).get("status") != "native_chooser_submitted":
+                    raise CharacterUnknown("Native import chooser was not submitted")
+                after = selected
+            if project_identity(after["state"]) != project_identity(native["state"]):
                 raise CharacterUnknown("Character Animator project changed after import selection")
             with staged.open("rb") as stream:
                 current_staged_digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -890,8 +955,11 @@ class CharacterAnimator:
                                     "bytes": staged.stat().st_size},
                     "native": after, "source_identity": "hashed_private_import_copy"}
 
-        return self.mutate("import", {}, lease_id, cancelled=cancelled, continuation=finish,
+        wav_handoff = kind == "audio_wav"
+        native_parameters = {"source_path": str(staged), "expected_sha256": staged_digest}
+        return self.mutate("import", native_parameters, lease_id, cancelled=cancelled, continuation=finish,
                            adopt_existing_import=True,
+                           native_operation="open_audio_wav" if wav_handoff else None,
                            intent={"source": str(original), "source_sha256": source_digest,
                                    "source_bytes": before.st_size,
                                    "import_copy": str(staged), "import_copy_sha256": staged_digest,
@@ -1212,7 +1280,8 @@ class CharacterAnimator:
                                  "background_panel" if export_parent and self._background_main(state) else None)
                 if not export_parent or not allowed_modals or current_phase is None:
                     raise CharacterRejected("Export continuation requires the exact existing Export Scene or parented Go To chooser")
-                arguments = {"kind": "export_png_wav", "directory": str(target),
+                arguments = {"operation_id": operation_id,
+                             "kind": "export_png_wav", "directory": str(target),
                              "basename": intent.get("name"), "project_root": source_root,
                              "output_directory_identity": identity}
 
@@ -1258,6 +1327,9 @@ class CharacterAnimator:
                     raise CharacterUnknown("Export continuation remains unresolved; inspect its operation journal") from exc
             if action in ("continue_import", "confirm_cancelled_import"):
                 intent = packet.get("intent", {})
+                if (action == "continue_import"
+                        and packet.get("initial_native_operation") == "open_audio_wav"):
+                    raise CharacterRejected("An uncertain WAV handoff cannot be replayed through the file chooser")
                 kind = intent.get("kind")
                 extension = {"puppet_psd": ".psd", "audio_wav": ".wav"}.get(kind)
                 if extension is None:
@@ -1375,12 +1447,20 @@ class CharacterAnimator:
                         and window.get("role") == "AXSheet" and import_parent)
                     for window in modal_windows)
                 existing_import = (focus.get("identifier") == "open-panel" and focus.get("title") == "Import")
-                existing_go_to = (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet"
-                                  and import_parent)
+                def contains_go_to(node):
+                    return ((node.get("identifier") == "GoToWindow" and node.get("role") == "AXSheet")
+                            or any(contains_go_to(child) for child in node.get("children", [])
+                                   if isinstance(child, dict)))
+
+                existing_go_to = import_parent and (
+                    (focus.get("identifier") == "GoToWindow" and focus.get("role") == "AXSheet")
+                    or any(window.get("identifier") == "open-panel" and window.get("title") == "Import"
+                           and contains_go_to(window) for window in windows))
                 if not import_parent or not allowed_modals or not (existing_import or existing_go_to
                                                                     or self._background_main(state)):
                     raise CharacterRejected("An unrelated modal blocks the exact existing Import or Go To chooser")
-                arguments = {"kind": "import", "directory": str(staged.parent),
+                arguments = {"operation_id": operation_id,
+                             "kind": "import", "directory": str(staged.parent),
                              "basename": staged.name, "project_root": source_root,
                              "expected_sha256": intent["import_copy_sha256"]}
 

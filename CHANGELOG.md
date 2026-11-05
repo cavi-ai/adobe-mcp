@@ -44,6 +44,9 @@
 
 ### Fixed
 
+- Release an owned Character Animator lease after app exit when no operation is pending.
+- Use nonblocking project-file inspection for Character Animator ownership checks.
+- Retain bounded attempt diagnostics after interrupted native chooser calls.
 - Keep Character Animator ownership responses stable while opening a prepared project copy.
 - Activate the exact owned background chooser before continuing its recorded operation.
 
