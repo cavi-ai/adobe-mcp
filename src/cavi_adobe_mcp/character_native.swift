@@ -301,7 +301,53 @@ final class Observation {
             }
             var budget = 512, truncated = false
             progress("observe_tree_started", details: ["windows": windows.count])
-            func walk(_ element: AXUIElement, depth: Int, path: String) -> [String: Any] {
+            func supportedAttributes(_ element: AXUIElement) -> [String] {
+                var names: CFArray?
+                guard AXUIElementCopyAttributeNames(element, &names) == .success,
+                      let values = names as? [String] else { return [] }
+                return Array(values.prefix(96))
+            }
+            func selectedURLMetadata(_ element: AXUIElement, attributeName: String,
+                                     supported: [String]) -> [[String: Any]] {
+                guard supported.contains(attributeName),
+                      let selected = attribute(element, attributeName) as? [AXUIElement] else { return [] }
+                return selected.prefix(32).compactMap { item in
+                    var itemPID: pid_t = 0
+                    guard AXUIElementGetPid(item, &itemPID) == .success,
+                          itemPID == application.processIdentifier else { return nil }
+                    let url = (attribute(item, "AXURL") as? URL)?.absoluteString
+                        ?? text(item, "AXURL")
+                        ?? text(item, "AXDocument")
+                    guard let url else { return nil }
+                    return ["role": text(item, "AXRole") ?? "unknown",
+                            "identifier": text(item, "AXIdentifier") ?? "",
+                            "url": String(url.prefix(2048)),
+                            "selected": bool(item, "AXSelected") ?? true]
+                }
+            }
+            func exportBrowserMetadata(_ browser: AXUIElement) -> [String: Any] {
+                let supported = supportedAttributes(browser)
+                var result: [String: Any] = ["supported_attributes": supported]
+                for name in ["AXSelectedChildren", "AXSelectedRows"] where supported.contains(name) {
+                    result[name] = selectedURLMetadata(browser, attributeName: name, supported: supported)
+                }
+                if supported.contains("AXColumns"),
+                   let columns = attribute(browser, "AXColumns") as? [AXUIElement] {
+                    result["AXColumns_count"] = columns.count
+                    result["AXColumns"] = columns.prefix(16).enumerated().map { index, column in
+                        let columnAttributes = supportedAttributes(column)
+                        var selected: [String: Any] = ["index": index]
+                        for name in ["AXSelectedChildren", "AXSelectedRows"] where columnAttributes.contains(name) {
+                            selected[name] = selectedURLMetadata(column, attributeName: name,
+                                                                  supported: columnAttributes)
+                        }
+                        return selected
+                    }
+                }
+                return result
+            }
+            func walk(_ element: AXUIElement, depth: Int, path: String,
+                      inExportScenePanel: Bool = false) -> [String: Any] {
                 var node = scalarNode(element, path: path)
                 observation.nodes.append((element, node)); budget -= 1
                 if observation.nodes.count % 64 == 0 {
@@ -309,11 +355,21 @@ final class Observation {
                 }
                 // File chooser sidebars are unrelated to project/scene identity and include account locations.
                 let sidebar = node["role"] as? String == "AXOutline" && node["description"] as? String == "sidebar"
-                if depth < 12 && budget > 0 && !sidebar {
+                let exportScenePanel = inExportScenePanel
+                    || (node["role"] as? String == "AXWindow"
+                        && node["identifier"] as? String == "save-panel"
+                        && node["title"] as? String == "Export Scene")
+                let exportFileList = exportScenePanel && node["role"] as? String == "AXBrowser"
+                if exportFileList {
+                    node["children_omitted"] = "export_scene_file_list"
+                    node["native_selection_metadata"] = exportBrowserMetadata(element)
+                    observation.nodes[observation.nodes.count - 1].1 = node
+                } else if depth < 12 && budget > 0 && !sidebar {
                     var descendants: [[String: Any]] = []
                     for (index, child) in children(element).prefix(128).enumerated() {
                         if budget <= 0 { truncated = true; break }
-                        descendants.append(walk(child, depth: depth + 1, path: path + "/" + String(index)))
+                        descendants.append(walk(child, depth: depth + 1, path: path + "/" + String(index),
+                                                inExportScenePanel: exportScenePanel))
                     }
                     if !descendants.isEmpty { node["children"] = descendants }
                 } else if !children(element).isEmpty && !sidebar { truncated = true }
@@ -696,23 +752,38 @@ final class Observation {
             try fail("FOCUS_CHANGED", "Chooser input requires existing event access and the observed foreground application")
         }
         let expectedFrame = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+        let expectedCenter = CGPoint(x: expectedFrame.midX, y: expectedFrame.midY)
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        guard let top = windows.first(where: { item in
+        let top = windows.first(where: { item in
                   // The system cursor is a visual plane, not a keyboard-input window.
                   if item[kCGWindowOwnerName as String] as? String == "Window Server",
                      item[kCGWindowLayer as String] as? Int == Int(CGWindowLevelForKey(.cursorWindow)) { return false }
                   guard (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                         let bounds = item[kCGWindowBounds as String] as? [String: Any],
                         let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                  return rect.intersects(expectedFrame)
-              }), top[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
+                  return rect.contains(expectedCenter)
+              })
+        let observedTopWindowID = (top?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let observedTopPID = top?[kCGWindowOwnerPID as String] as? Int
+        let observedTopOwner = (top?[kCGWindowOwnerName as String] as? String).map { String($0.prefix(128)) }
+        let observedTopFrame = (top?[kCGWindowBounds as String] as? [String: Any])
+            .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+            .map { [$0.minX, $0.minY, $0.width, $0.height] }
+        let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ownerText = observedTopOwner ?? "none"
+        let topPIDText = observedTopPID.map(String.init) ?? "none"
+        let topWindowIDText = observedTopWindowID.map(String.init) ?? "none"
+        let topFrameText = observedTopFrame.map { String(describing: $0) } ?? "none"
+        let foregroundPIDText = foregroundPID.map(String.init) ?? "none"
+        guard let top, observedTopPID == Int(app.processIdentifier),
               let bounds = top[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               abs(rect.minX - f[0]) <= 2, abs(rect.minY - f[1]) <= 2,
               abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2,
+              foregroundPID == app.processIdentifier,
               let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
-            try fail("FOCUS_CHANGED", "The exact observed chooser must be the topmost native window")
+            try fail("FOCUS_CHANGED", "The exact observed chooser must be the topmost native window (expected_frame=\(f), blocking_owner=\(ownerText), blocking_pid=\(topPIDText), blocking_window_id=\(topWindowIDText), blocking_frame=\(topFrameText), foreground_pid=\(foregroundPIDText), target_pid=\(app.processIdentifier))")
         }
         down.flags = flags; up.flags = flags
         dispatched = true
@@ -951,6 +1022,11 @@ final class Observation {
         var livePID: pid_t = 0
         if let focusedApp = axElement(attribute(system, "AXFocusedApplication")) { AXUIElementGetPid(focusedApp, &livePID) }
         let currentRoot = AXUIElementCreateApplication(app.processIdentifier)
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier,
+           bool(currentRoot, "AXFrontmost") == true,
+           hasMatchingOnScreenWindow(currentRoot, pid: app.processIdentifier) {
+            return
+        }
         if !hasMatchingOnScreenWindow(currentRoot, pid: app.processIdentifier) {
             guard let roots = observation.state["project_roots"] as? [String], roots.count == 1 else {
                 try fail("PROJECT_IDENTITY_UNAVAILABLE", "Mission Control fallback requires the sole observed project root")
@@ -994,7 +1070,23 @@ final class Observation {
             try fail("FOCUS_CHANGED", "Activation did not expose the same-process requested chooser without a prompt")
         }
         let originalPanel: AXUIElement
-        if let focused = activated.focusedWindow,
+        if kind == "export_png_wav" {
+            let exportPanels = activated.nodes.filter {
+                text($0.0, "AXIdentifier") == "save-panel"
+                    && text($0.0, "AXTitle") == "Export Scene"
+                    && text($0.0, "AXRole") == "AXWindow"
+                    && bool($0.0, "AXModal") == true
+            }
+            guard exportPanels.count == 1 else {
+                try fail("CHOOSER_MISMATCH", "The exact observed Export Scene save panel is absent or ambiguous")
+            }
+            var panelPID: pid_t = 0
+            guard AXUIElementGetPid(exportPanels[0].0, &panelPID) == .success,
+                  panelPID == originalPID else {
+                try fail("CHOOSER_MISMATCH", "The Export Scene save panel does not belong to the owned process")
+            }
+            originalPanel = exportPanels[0].0
+        } else if let focused = activated.focusedWindow,
            text(focused, "AXIdentifier") == "GoToWindow", text(focused, "AXRole") == "AXSheet" {
             originalPanel = focused
         } else {
@@ -1020,10 +1112,26 @@ final class Observation {
         }
         try await Task.sleep(nanoseconds: 120_000_000)
         phase = "chooser_foreground"
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { try fail("FOCUS_CHANGED", "Character Animator is not frontmost; shortcut was not sent") }
+        let raised = try observe()
+        try ownedRoot(parameters, raised)
+        let raisedPanel = raised.nodes.filter {
+            CFEqual($0.0, originalPanel)
+                && text($0.0, "AXIdentifier") == (kind == "export_png_wav" ? "save-panel" : text(originalPanel, "AXIdentifier"))
+                && (kind != "export_png_wav" || text($0.0, "AXTitle") == "Export Scene")
+        }
+        guard raised.application?.processIdentifier == originalPID,
+              (raised.state["launch_time"] as? String) == originalLaunchTime,
+              raised.state["authentication_or_permission_prompt"] as? Bool != true,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == originalPID,
+              typedChooserIsFocused(raised, kind: kind),
+              hasOnlyExpectedChooserModal(raised, kind: kind),
+              raisedPanel.count == 1 else {
+            try fail("FOCUS_CHANGED", "The exact owned chooser did not remain observed after raising its window")
+        }
+        observation = raised
         // A single fixed Cocoa chooser shortcut, never a caller-selected key sequence.
         phase = "go_to_folder_shortcut"
-        try chooserKey(try observe(), key: 5, flags: [.maskCommand, .maskShift])
+        try chooserKey(observation, key: 5, flags: [.maskCommand, .maskShift])
         if kind == "import" || kind == "export_png_wav" {
             return ["status": "native_chooser_directory_requested", "directory": directory,
                     "basename": basename, "completion": "unverified", "retry_safe": false]
@@ -1241,6 +1349,42 @@ final class Observation {
         }
 
         var current = initial
+        if kind == "export_png_wav",
+           current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel",
+           !isDirectoryReady(current) {
+            var expandedDisclosure = false
+            let disclosures = current.nodes.filter {
+                text($0.0, "AXIdentifier") == "NS_OPEN_SAVE_DISCLOSURE_TRIANGLE"
+                    && text($0.0, "AXDescription") == "show more options"
+                    && actions($0.0).contains("AXPress")
+            }
+            if disclosures.count == 1 {
+                try verify(current)
+                let savePanel = try panel(current, kind: kind)
+                guard sameProcessAncestor(disclosures[0].0, ancestor: savePanel, pid: originalPID),
+                      bool(disclosures[0].0, "AXEnabled") == true else {
+                    try fail("CHOOSER_MISMATCH", "The observed disclosure is not enabled inside the exact Export Scene chooser")
+                }
+                try verifyTopmostChooser(current, window: savePanel)
+                try perform(disclosures[0].0)
+                expandedDisclosure = true
+                current = try observe()
+                try verify(current)
+                guard current.state["tree_truncated"] as? Bool == false,
+                      typedChooserIsFocused(current, kind: kind),
+                      current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel" else {
+                    try fail("CHOOSER_MISMATCH", "The same Export Scene chooser was not observed after expanding its folder controls")
+                }
+            }
+            if expandedDisclosure && !isDirectoryReady(current),
+               current.focusedWindow.map({ text($0, "AXIdentifier") }) == "save-panel",
+               current.nodes.first(where: { $0.1["identifier"] as? String == "where popup" })?.1["url"] as? String == nil {
+                let whereNode = current.nodes.first { $0.1["identifier"] as? String == "where popup" }
+                let whereValue = whereNode?.1["value"] as? String ?? "missing"
+                let whereURL = whereNode?.1["url"] as? String ?? "missing"
+                try fail("DIRECTORY_NOT_OBSERVED", "Export Scene Where control has no full path URL after disclosure expansion (value=\(whereValue), url=\(whereURL))")
+            }
+        }
         progress("chooser_initial_state", details: ["directory_ready": isDirectoryReady(current),
                                                      "focused_identifier": current.focusedWindow.flatMap { text($0, "AXIdentifier") } ?? "none"])
         if !isDirectoryReady(current) {
@@ -1293,21 +1437,36 @@ final class Observation {
             try fail("FOCUS_CHANGED", "The exact foreground chooser is required immediately before submission")
         }
         let expectedFrame = CGRect(x: f[0], y: f[1], width: f[2], height: f[3])
+        let expectedCenter = CGPoint(x: expectedFrame.midX, y: expectedFrame.midY)
         let serverWindows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                         kCGNullWindowID) as? [[String: Any]] ?? []
-        guard let top = serverWindows.first(where: { item in
+        let top = serverWindows.first(where: { item in
                   if item[kCGWindowOwnerName as String] as? String == "Window Server",
                      item[kCGWindowLayer as String] as? Int == Int(CGWindowLevelForKey(.cursorWindow)) { return false }
                   guard (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                         let bounds = item[kCGWindowBounds as String] as? [String: Any],
                         let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
-                  return rect.intersects(expectedFrame)
-              }), top[kCGWindowOwnerPID as String] as? Int == Int(app.processIdentifier),
+                  return rect.contains(expectedCenter)
+              })
+        let observedTopWindowID = (top?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        let observedTopPID = top?[kCGWindowOwnerPID as String] as? Int
+        let observedTopOwner = (top?[kCGWindowOwnerName as String] as? String).map { String($0.prefix(128)) }
+        let observedTopFrame = (top?[kCGWindowBounds as String] as? [String: Any])
+            .flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }
+            .map { [$0.minX, $0.minY, $0.width, $0.height] }
+        let foregroundPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let ownerText = observedTopOwner ?? "none"
+        let topPIDText = observedTopPID.map(String.init) ?? "none"
+        let topWindowIDText = observedTopWindowID.map(String.init) ?? "none"
+        let topFrameText = observedTopFrame.map { String(describing: $0) } ?? "none"
+        let foregroundPIDText = foregroundPID.map(String.init) ?? "none"
+        guard let top, observedTopPID == Int(app.processIdentifier),
               let bounds = top[kCGWindowBounds as String] as? [String: Any],
               let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
               abs(rect.minX - f[0]) <= 2, abs(rect.minY - f[1]) <= 2,
-              abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2 else {
-            try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window")
+              abs(rect.width - f[2]) <= 2, abs(rect.height - f[3]) <= 2,
+              foregroundPID == app.processIdentifier else {
+            try fail("FOCUS_CHANGED", "The exact observed chooser is not the topmost Character Animator window (expected_frame=\(f), blocking_owner=\(ownerText), blocking_pid=\(topPIDText), blocking_window_id=\(topWindowIDText), blocking_frame=\(topFrameText), foreground_pid=\(foregroundPIDText), target_pid=\(app.processIdentifier))")
         }
     }
     func continueDirectoryEntry(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
@@ -1474,7 +1633,7 @@ final class Observation {
                 try await Task.sleep(nanoseconds: 120_000_000)
                 expanded = try observe()
             }
-            let expandedPanel = try chooserPanel(expanded)
+            _ = try chooserPanel(expanded)
             let whereNodes = expanded.nodes.filter {
                 $0.1["identifier"] as? String == "where popup"
             }
