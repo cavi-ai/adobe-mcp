@@ -631,6 +631,96 @@ final class Observation {
         dispatched = true
         down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
     }
+    func activateTargetedImportKeyboardContext(_ observation: Observation,
+                                               panel: AXUIElement,
+                                               keyboardWindow: AXUIElement? = nil,
+                                               field: AXUIElement? = nil,
+                                               expectedPath: String? = nil) throws {
+        let window = keyboardWindow ?? panel
+        guard let app = observation.application, let root = observation.root,
+              observation.state["tree_truncated"] as? Bool == false,
+              observation.state["authentication_or_permission_prompt"] as? Bool != true,
+              bool(panel, "AXModal") == true,
+              text(panel, "AXIdentifier") == "open-panel",
+              text(panel, "AXTitle") == "Import",
+              (CFEqual(window, panel)
+                  || (text(window, "AXIdentifier") == "GoToWindow"
+                      && text(window, "AXRole") == "AXSheet"
+                      && sameProcessAncestor(window, ancestor: panel, pid: app.processIdentifier))),
+              NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID).filter({
+                  $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL
+              }).count == 1 else {
+            try fail("CHOOSER_MISMATCH", "Targeted keyboard context requires the same observed Import panel and process")
+        }
+        var panelPID: pid_t = 0
+        var windowPID: pid_t = 0
+        guard AXUIElementGetPid(panel, &panelPID) == .success,
+              panelPID == app.processIdentifier,
+              AXUIElementGetPid(window, &windowPID) == .success,
+              windowPID == app.processIdentifier else {
+            try fail("CHOOSER_MISMATCH", "The targeted chooser window does not belong to Character Animator")
+        }
+        let instances = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+            .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+        guard instances.count == 1,
+              instances[0].processIdentifier == app.processIdentifier,
+              (instances[0].launchDate?.timeIntervalSince1970 ?? 0) == (app.launchDate?.timeIntervalSince1970 ?? 0) else {
+            try fail("FOCUS_CHANGED", "Character Animator process identity changed before targeted input")
+        }
+        if bool(root, "AXFrontmost") != true {
+            var frontmostSettable: DarwinBoolean = false
+            if AXUIElementIsAttributeSettable(root, "AXFrontmost" as CFString, &frontmostSettable) == .success,
+               frontmostSettable.boolValue {
+                guard AXUIElementSetAttributeValue(root, "AXFrontmost" as CFString, kCFBooleanTrue) == .success else {
+                    try fail("FOCUS_CHANGED", "Character Animator did not accept its guarded frontmost request")
+                }
+            } else {
+                _ = app.activate(options: [.activateAllWindows])
+            }
+        }
+        try perform(window, action: "AXRaise")
+        var windowSettable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(window, "AXFocused" as CFString, &windowSettable) == .success,
+           windowSettable.boolValue {
+            guard AXUIElementSetAttributeValue(window, "AXFocused" as CFString, kCFBooleanTrue) == .success,
+                  bool(window, "AXFocused") == true else {
+                try fail("FOCUS_CHANGED", "The exact observed chooser window did not accept focused-window state")
+            }
+        }
+        if let field {
+            guard sameProcessAncestor(field, ancestor: panel, pid: app.processIdentifier),
+                  text(field, "AXIdentifier") == "PathTextField",
+                  text(field, "AXRole") == "AXTextField",
+                  expectedPath == nil || text(field, "AXValue") == expectedPath else {
+                try fail("CHOOSER_MISMATCH", "The exact same-process Go To path field changed before targeted Return")
+            }
+            var fieldSettable: DarwinBoolean = false
+            if AXUIElementIsAttributeSettable(field, "AXFocused" as CFString, &fieldSettable) == .success,
+               fieldSettable.boolValue {
+                guard AXUIElementSetAttributeValue(field, "AXFocused" as CFString, kCFBooleanTrue) == .success else {
+                    try fail("FOCUS_CHANGED", "The exact Go To path field could not receive focused state")
+                }
+            }
+        }
+        let currentInstances = NSRunningApplication.runningApplications(withBundleIdentifier: characterBundleID)
+            .filter { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath() == applicationURL }
+        guard currentInstances.count == 1,
+              currentInstances[0].processIdentifier == app.processIdentifier,
+              (currentInstances[0].launchDate?.timeIntervalSince1970 ?? 0) == (app.launchDate?.timeIntervalSince1970 ?? 0),
+              bool(root, "AXFrontmost") == true,
+              let focusedElement = axElement(attribute(root, "AXFocusedUIElement")),
+              (CFEqual(focusedElement, window)
+                  || sameProcessAncestor(focusedElement, ancestor: window, pid: app.processIdentifier)) else {
+            try fail("FOCUS_CHANGED", "Character Animator did not establish the exact Import keyboard window")
+        }
+        if let field {
+            guard let focusedField = axElement(attribute(root, "AXFocusedUIElement")),
+                  CFEqual(focusedField, field),
+                  expectedPath == nil || text(field, "AXValue") == expectedPath else {
+                try fail("FOCUS_CHANGED", "The exact Go To path field is not the app's keyboard target")
+            }
+        }
+    }
     func capture(_ observation: Observation, parameters: [String: Any]) async throws -> [String: Any] {
         guard CGPreflightScreenCaptureAccess() else { try fail("SCREEN_PERMISSION_UNAVAILABLE", "Screen capture permission is absent; no permission request was made") }
         guard let app = observation.application else { try fail("APPLICATION_UNAVAILABLE", "Character Animator is not running") }
@@ -1185,6 +1275,7 @@ final class Observation {
                   let goToUp = CGEvent(keyboardEventSource: nil, virtualKey: 5, keyDown: false) else {
                 try fail("FOCUS_UNAVAILABLE", "The exact Import panel cannot receive the targeted Go To shortcut")
             }
+            try activateTargetedImportKeyboardContext(observation, panel: originalImportPanel)
             goToDown.flags = [.maskCommand, .maskShift]
             goToUp.flags = [.maskCommand, .maskShift]
             phase = "targeted_go_to_shortcut"
@@ -1315,14 +1406,15 @@ final class Observation {
                       let readyPanel, sameProcessAncestor(sheetElement, ancestor: readyPanel, pid: originalPID),
                       readySheets.count == 1, CFEqual(readySheets[0].0, sheetElement),
                       readyFields.count == 1, CFEqual(readyFields[0].0, readbackFields[0].0),
-                      let appRoot = confirmationReady.root,
-                      let focusedElement = axElement(attribute(appRoot, "AXFocusedUIElement")),
-                      CFEqual(focusedElement, readbackFields[0].0),
                       CGPreflightPostEventAccess(),
                       let returnDown = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
                       let returnUp = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else {
                     try fail("CHOOSER_MISMATCH", "The exact owned Go To field was not focused for targeted confirmation")
                 }
+                try activateTargetedImportKeyboardContext(confirmationReady, panel: readyPanel,
+                                                          keyboardWindow: sheetElement,
+                                                          field: readbackFields[0].0,
+                                                          expectedPath: entryPath)
                 phase = "directory_confirm"
                 targetedConfirmationMayHaveStarted = true
                 progress("targeted_confirmation_will_dispatch", details: ["pid": Int(originalPID)], sync: true)
