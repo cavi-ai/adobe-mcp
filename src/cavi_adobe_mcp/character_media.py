@@ -60,7 +60,8 @@ def _audio(workspace, item, frame_duration):
         with wave.open(io.BytesIO(raw), 'rb') as stream:
             rate, channels, width, samples = (stream.getframerate(), stream.getnchannels(),
                                                stream.getsampwidth(), stream.getnframes())
-            if (stream.getcomptype() != 'NONE' or not 8000 <= rate <= 192000
+            if (stream.getcomptype() != 'NONE' or stream.getformat() == wave.WAVE_FORMAT_IEEE_FLOAT
+                    or not 8000 <= rate <= 192000
                     or channels not in (1, 2) or not 1 <= width <= 4 or samples <= 0
                     or samples / rate > 300
                     or len(stream.readframes(samples)) != samples * channels * width):

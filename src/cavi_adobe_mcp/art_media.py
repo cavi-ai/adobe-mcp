@@ -212,7 +212,8 @@ def editorial(workspace, receipt, directory, audio=None):
     if audio is not None:
         audio_path = inside(workspace, audio)
         with wave.open(str(audio_path), "rb") as stream:
-            if stream.getcomptype() != "NONE" or stream.getnchannels() not in (1, 2):
+            if (stream.getcomptype() != "NONE" or stream.getformat() == wave.WAVE_FORMAT_IEEE_FLOAT
+                    or stream.getnchannels() not in (1, 2)):
                 raise ValueError("Use mono or stereo PCM WAV")
             audio_info = {"path": str(audio_path), "sha256": digest(audio_path),
                           "samples": stream.getnframes(), "sample_rate": stream.getframerate(),
