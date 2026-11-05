@@ -6,7 +6,6 @@ import fcntl
 import hashlib
 import json
 import os
-import plistlib
 import re
 import shutil
 import stat
@@ -16,6 +15,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from cavi_mcp_core import apps
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
 from cavi_mcp_core.journal import write_json
 from PIL import Image
@@ -58,13 +58,12 @@ def write_json_exclusive(path: Path, value):
 
 
 def application():
+    """The Dimension bundle at APP_PATH: the native helper launches only that bundle."""
     try:
-        info = plistlib.loads((APP_PATH / "Contents/Info.plist").read_bytes())
-    except (OSError, ValueError) as exc:
-        raise DimensionRejected("Adobe Dimension is not installed at its expected path", "APP_UNAVAILABLE") from exc
-    if info.get("CFBundleIdentifier") != BUNDLE_ID:
-        raise DimensionRejected("Installed application identity is not Adobe Dimension", "APP_IDENTITY_MISMATCH")
-    return info
+        return apps.bundle("Adobe Dimension", BUNDLE_ID, APP_PATH.name, None, APP_PATH.parent,
+                           path=APP_PATH).info
+    except (apps.AppUnavailable, apps.AppMismatch) as exc:
+        raise DimensionRejected(str(exc), exc.error_code) from exc
 
 
 class DimensionBridge:

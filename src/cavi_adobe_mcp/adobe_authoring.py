@@ -11,7 +11,6 @@ import hashlib
 import json
 import math
 import os
-import plistlib
 import re
 import shutil
 import stat
@@ -25,13 +24,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
+from cavi_mcp_core import apps
 from cavi_mcp_core.journal import archive, completion, fingerprint
 from cavi_mcp_core.journal import write_json as _write_json
 
 App = Literal["photoshop", "illustrator"]
+# app: (bundle identifier, /Applications glob, document suffix, override, name)
 APPS = {
-    "photoshop": ("com.adobe.Photoshop", "Adobe Photoshop*/*.app", ".psd"),
-    "illustrator": ("com.adobe.illustrator", "Adobe Illustrator*/*.app", ".ai"),
+    "photoshop": ("com.adobe.Photoshop", "Adobe Photoshop*/*.app", ".psd", "CAVI_PHOTOSHOP_APP",
+                  "Adobe Photoshop"),
+    "illustrator": ("com.adobe.illustrator", "Adobe Illustrator*/*.app", ".ai",
+                    "CAVI_ILLUSTRATOR_APP", "Adobe Illustrator"),
 }
 DRIVER = Path(__file__).with_name("adobe_authoring.jsx")
 SESSION = re.compile(r"^[0-9a-f]{32}$")
@@ -220,28 +223,13 @@ class AdobeAuthoring:
     def _application(self):
         if sys.platform != "darwin":
             raise RuntimeError("Native Adobe authoring requires macOS")
-        candidates = [self.app_path] if self.app_path else sorted(
-            Path("/Applications").glob(APPS[self.app][1]), reverse=True)
-        for candidate in candidates:
-            try:
-                info = plistlib.loads((candidate / "Contents/Info.plist").read_bytes())
-            except (FileNotFoundError, plistlib.InvalidFileException):
-                continue
-            if info.get("CFBundleIdentifier") == APPS[self.app][0]:
-                executable = candidate / "Contents/MacOS" / info["CFBundleExecutable"]
-                return candidate, info, executable
-        raise FileNotFoundError(f"{self.app} is not installed")
+        identifier, pattern, _, env, name = APPS[self.app]
+        return apps.bundle(name, identifier, pattern, env, path=self.app_path)
 
     def status(self):
         """Inspect installation and process identity without sending Apple events or launching apps."""
-        path, info, executable = self._application()
-        process = subprocess.run(["/bin/ps", "-axo", "pid=,lstart=,comm="],
-                                 capture_output=True, text=True, check=True, timeout=5)
-        matches = []
-        for line in process.stdout.splitlines():
-            parts = line.strip().split(maxsplit=6)
-            if len(parts) == 7 and parts[6] == str(executable):
-                matches.append({"pid": int(parts[0]), "started": " ".join(parts[1:6])})
+        path, info, executable, _ = self._application()
+        matches = [process._asdict() for process in apps.processes(executable)]
         if len(matches) > 1:
             raise RuntimeError("Multiple app processes found; select a single instance before authoring")
         return {"app": self.app, "application": str(path), "version": info["CFBundleShortVersionString"],
