@@ -2,6 +2,7 @@
 
 import json
 import os
+import plistlib
 import re
 import subprocess
 import sys
@@ -15,7 +16,12 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from cavi_adobe_mcp.animate_authoring import AnimateAuthoring, AnimateRejected, AnimateUnknown
+from cavi_adobe_mcp.animate_authoring import (
+    APP_ID,
+    AnimateAuthoring,
+    AnimateRejected,
+    AnimateUnknown,
+)
 
 
 class AnimateAuthoringTests(unittest.TestCase):
@@ -276,6 +282,15 @@ class AnimateTransportTests(unittest.TestCase):
         (self.root / "out").mkdir()
         self.authoring = AnimateAuthoring(self.root)
 
+    def fake_app(self):
+        """An Animate bundle with the installed identity, for transport tests that never run it."""
+        app = self.root / "Animate.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (app / "Contents/Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleIdentifier": APP_ID, "CFBundleExecutable": "Animate"}))
+        (app / "Contents/MacOS/Animate").write_text("")
+        return app
+
     @staticmethod
     def local(uri):
         return Path(unquote(urlparse(uri).path))
@@ -310,7 +325,7 @@ class AnimateTransportTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         self.authoring.dispatcher = None
-        self.authoring.app_path = self.root / "Animate.app"
+        self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
         with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
                 patch("cavi_adobe_mcp.animate_authoring.subprocess.run", side_effect=launch), \
@@ -348,7 +363,7 @@ class AnimateTransportTests(unittest.TestCase):
             return {"status": "submitted", "operation_id": operation_id, "launcher": launcher}
 
         self.authoring.dispatcher = None
-        self.authoring.app_path = self.root / "Animate.app"
+        self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
         with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
                 patch("cavi_adobe_mcp.animate_authoring.subprocess.run", side_effect=launch), \

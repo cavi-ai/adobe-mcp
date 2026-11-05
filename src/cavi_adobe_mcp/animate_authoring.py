@@ -20,6 +20,7 @@ from fractions import Fraction
 from pathlib import Path
 from threading import Event
 
+from cavi_mcp_core import apps
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
 from cavi_mcp_core.journal import archive, completion, fingerprint, write_json
 from PIL import Image
@@ -27,7 +28,9 @@ from PIL import Image
 from . import art_media, native
 
 APP_ID = "com.adobe.Adobe-Animate-2024.application"
-APP_GLOB = "Adobe Animate 2024/Adobe Animate 2024.app"
+APP_NAME = "Adobe Animate 2024"
+APP_GLOB = "Adobe Animate*/*.app"
+APP_ENV = "CAVI_ANIMATE_APP"
 DRIVER = Path(__file__).with_name("animate_authoring.jsfl")
 NATIVE_HELPER = Path(__file__).with_name("animate_native.swift")
 SESSION_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -77,7 +80,7 @@ class AnimateAuthoring:
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 5 <= timeout <= 180:
             raise ValueError("Timeout must be in 5..180 seconds")
         self.timeout = timeout
-        self.app_path = Path(app_path).resolve() if app_path else Path("/Applications") / APP_GLOB
+        self.app_path = Path(app_path).resolve() if app_path else None
         self.store = self.workspace / ".animate-authoring"
         self.dispatcher = dispatcher
         self._volume_name = None
@@ -99,30 +102,24 @@ class AnimateAuthoring:
             raise AnimateRejected("Output must not already exist")
         return path
 
+    def _app(self):
+        """The Animate bundle: ``app_path``, else ``CAVI_ANIMATE_APP``, else /Applications."""
+        try:
+            return apps.bundle(APP_NAME, APP_ID, APP_GLOB, APP_ENV, path=self.app_path)
+        except (apps.AppUnavailable, apps.AppMismatch) as exc:
+            raise AnimateRejected(str(exc), exc.error_code) from exc
+
     def status(self):
         """Read app installation and process state only; never launch Animate."""
-        try:
-            info = plistlib.loads((self.app_path / "Contents/Info.plist").read_bytes())
-        except (OSError, ValueError) as exc:
-            raise AnimateRejected("Adobe Animate 2024 is not installed at its expected path",
-                                  "APP_UNAVAILABLE") from exc
-        if info.get("CFBundleIdentifier") != APP_ID:
-            raise AnimateRejected("Installed application identity is not Adobe Animate 2024",
-                                  "APP_IDENTITY_MISMATCH")
-        executable = self.app_path / "Contents/MacOS" / info["CFBundleExecutable"]
+        app = self._app()
+        version = app.info.get("CFBundleShortVersionString", "unknown")
         if sys.platform != "darwin":
-            return {"application": str(self.app_path), "version": info.get("CFBundleShortVersionString", "unknown"),
+            return {"application": str(app.path), "version": version,
                     "running": False, "launches_application": False}
-        process = subprocess.run(["/bin/ps", "-axo", "pid=,lstart=,comm="], capture_output=True,
-                                 text=True, check=True, timeout=5)
-        matches = []
-        for line in process.stdout.splitlines():
-            parts = line.strip().split(maxsplit=6)
-            if len(parts) == 7 and parts[6] == str(executable):
-                matches.append({"pid": int(parts[0]), "started": " ".join(parts[1:6])})
+        matches = [process._asdict() for process in apps.processes(app.executable)]
         if len(matches) > 1:
             raise AnimateRejected("Multiple Animate processes found; select one instance", "APP_AMBIGUOUS")
-        return {"application": str(self.app_path), "version": info.get("CFBundleShortVersionString", "unknown"),
+        return {"application": str(app.path), "version": version,
                 "running": bool(matches), "process": matches[0] if matches else None,
                 "launches_application": False, "authenticates": False}
 
@@ -159,7 +156,7 @@ class AnimateAuthoring:
     def _handle_jsfl_prompt(self, process, operation_id, launcher):
         """Run only the fixed handler for the exact per-operation Animate JSFL chooser."""
         request = {"operation": "handle_jsfl_prompt", "operation_id": operation_id,
-                   "launcher": launcher, "application": str(self.app_path),
+                   "launcher": launcher, "application": str(self._app().path),
                    "pid": process["pid"], "started": process["started"], "wait_seconds": 3.0}
         try:
             result = subprocess.run([str(self._native_helper())], input=json.dumps(request),
@@ -228,7 +225,7 @@ class AnimateAuthoring:
             if on_dispatch:
                 on_dispatch()
             try:
-                result = subprocess.run(["/usr/bin/open", "-a", str(self.app_path), "--", str(launcher_path)],
+                result = subprocess.run(["/usr/bin/open", "-a", str(self._app().path), "--", str(launcher_path)],
                                         capture_output=True, text=True, timeout=min(self.timeout, 15), check=False)
             except subprocess.TimeoutExpired as exc:
                 raise AnimateUnknown("LaunchServices open timed out; inspect Animate and its pending operation") from exc

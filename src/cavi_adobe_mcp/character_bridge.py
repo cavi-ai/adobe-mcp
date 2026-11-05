@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import plistlib
 import subprocess
 import sys
 import tempfile
@@ -13,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 
+from cavi_mcp_core import apps
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
 
 from . import native
@@ -30,22 +29,15 @@ class CharacterUnknown(OperationUnknown):
 
 
 def application():
+    """The Character Animator bundle and its Info.plist: the override, else the newest install."""
     if sys.platform != "darwin":
         raise CharacterRejected("Native Character Animator control requires macOS", "PLATFORM_UNSUPPORTED")
-    configured = os.environ.get("CAVI_CHARACTER_ANIMATOR_APP")
-    candidates = ([Path(configured)] if configured else
-                  sorted(Path("/Applications").glob("Adobe Character Animator*/*.app")))
-    valid = []
-    for path in candidates:
-        try:
-            data = plistlib.loads((path / "Contents/Info.plist").read_bytes())
-        except (OSError, ValueError):
-            continue
-        if data.get("CFBundleIdentifier") == BUNDLE_ID:
-            valid.append((path.resolve(), data))
-    if len(valid) != 1:
-        raise CharacterRejected("Select exactly one installed Character Animator app with CAVI_CHARACTER_ANIMATOR_APP")
-    return valid[0]
+    try:
+        app = apps.bundle("Adobe Character Animator", BUNDLE_ID, "Adobe Character Animator*/*.app",
+                          "CAVI_CHARACTER_ANIMATOR_APP")
+    except (apps.AppUnavailable, apps.AppMismatch) as exc:
+        raise CharacterRejected(str(exc), exc.error_code) from exc
+    return app.path, app.info
 
 
 class NativeBridge:

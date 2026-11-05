@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `CAVI_PHOTOSHOP_APP`, `CAVI_ILLUSTRATOR_APP` and `CAVI_ANIMATE_APP` choose the application bundle; an override naming another application is refused with `APP_IDENTITY_MISMATCH`.
+
+### Changed
+
+- Every server finds its application through `cavi-mcp-core` application lookup; without an override the newest installed version is used, including for Character Animator.
+- A missing Photoshop or Illustrator reports `APP_UNAVAILABLE` instead of `INPUT_NOT_FOUND`.
+
 ## 0.3.1 - 2026-11-04
 
 ### Added
