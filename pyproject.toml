@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27", "hatch-vcs>=0.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "cavi-adobe-mcp"
-version = "0.3.1"
+dynamic = ["version"]
 description = "MCP servers for Adobe Photoshop, Illustrator, After Effects, Animate, Character Animator and Dimension"
 readme = "README.md"
 license = "MIT"
@@ -56,6 +56,10 @@ cavi-dimension-mcp = "cavi_adobe_mcp.dimension_server:main"
 
 [dependency-groups]
 dev = ["numpy>=2.0,<3", "pypng>=0.20220715.0,<1", "ruff>=0.14,<1"]
+
+# The version comes from the git tag: vX.Y.Z builds X.Y.Z, later commits X.Y.(Z+1).devN+g<sha>.
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cavi_adobe_mcp"]

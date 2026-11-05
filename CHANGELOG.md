@@ -1,5 +1,7 @@
 # Changelog
 
+Versions come from git tags; a pull request adds its lines under Unreleased and never edits a version.
+
 ## Unreleased
 
 ### Added
@@ -8,6 +10,7 @@
 
 ### Changed
 
+- The package version is read from the release tag.
 - Every server finds its application through `cavi-mcp-core` application lookup; without an override the newest installed version is used, including for Character Animator.
 - A missing Photoshop or Illustrator reports `APP_UNAVAILABLE` instead of `INPUT_NOT_FOUND`.
 
