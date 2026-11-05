@@ -40,7 +40,6 @@ wheels = [
 
 [[package]]
 name = "cavi-adobe-mcp"
-version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
