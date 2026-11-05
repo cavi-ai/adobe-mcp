@@ -52,7 +52,15 @@ Register the servers you need in your MCP client and set the workspace:
 |---|---|
 | `CAVI_ADOBE_WORKSPACE` | Absolute directory every tool path is relative to. Required. |
 | `CAVI_ADOBE_DATA` | Private server state: native helper builds and Character Animator journals. Defaults to `~/.local/share/cavi-adobe-mcp`. |
-| `CAVI_CHARACTER_ANIMATOR_APP` | The Character Animator application, when more than one is installed. |
+| `CAVI_PHOTOSHOP_APP` | The Photoshop `.app` to use. |
+| `CAVI_ILLUSTRATOR_APP` | The Illustrator `.app` to use. |
+| `CAVI_ANIMATE_APP` | The Animate 2024 `.app` to use. |
+| `CAVI_CHARACTER_ANIMATOR_APP` | The Character Animator `.app` to use. |
+
+Without an override each server uses the newest installed version under `/Applications`
+with the application's bundle identifier. An override is final: one that names another
+application is refused with `APP_IDENTITY_MISMATCH`. Dimension is driven only at
+`/Applications/Adobe Dimension/Adobe Dimension.app`.
 
 Ownership records live inside the workspace (`.adobe-authoring/`, `.animate-authoring/`);
 keep them private.
