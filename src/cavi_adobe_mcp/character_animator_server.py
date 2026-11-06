@@ -234,7 +234,8 @@ async def project_prepare_copy(source: str, destination: str) -> CharacterPrepar
     """Copy a closed saved workspace .chproj tree and verify its file hashes before native opening.
 
     The source must not be open in Character Animator. This creates only a new workspace copy;
-    use its prepared_copy_id with session_control to open the exact copy and then claim it.
+    pass its prepared_copy_id to project_open_prepared_copy, inspect the opened root,
+    then claim it with session_control and the same prepared_copy_id.
     """
     return await execute(lambda cancelled: client().prepare_copy(source, destination, cancelled))
 

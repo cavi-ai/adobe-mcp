@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "character_status",
+      "arguments": {}
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "character_status",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/available": true,
+          "/structuredContent/connected": true,
+          "/structuredContent/launches_application": false
+        }
+      }
+    },
+    {
+      "id": "inspect-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "inspect",
+      "arguments": {}
+    },
+    {
+      "id": "inspect-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "inspect",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/launches_application": false,
+          "/structuredContent/pending_operation": null
+        },
+        "required_result_paths": [
+          "/structuredContent/project_id",
+          "/structuredContent/native/state/fingerprint"
+        ]
+      }
+    },
+    {
+      "id": "read-sequence",
+      "probe": "workflow",
+      "access": "read_only",
+      "repetitions": 3,
+      "steps": [
+        {
+          "tool": "character_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/available": true,
+              "/structuredContent/connected": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        },
+        {
+          "tool": "inspect",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/launches_application": false,
+              "/structuredContent/pending_operation": null
+            },
+            "required_result_paths": [
+              "/structuredContent/project_id",
+              "/structuredContent/native/state/fingerprint"
+            ]
+          }
+        },
+        {
+          "tool": "character_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/available": true,
+              "/structuredContent/connected": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -10,3 +10,4 @@ build/
 .DS_Store
 .adobe-authoring/
 .animate-authoring/
+node_modules/

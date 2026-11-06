@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "dimension_status",
+      "arguments": {}
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "dimension_status",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/native/running": true,
+          "/structuredContent/launches_application": false
+        }
+      }
+    },
+    {
+      "id": "inspect-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "dimension_inspect",
+      "arguments": {}
+    },
+    {
+      "id": "inspect-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "dimension_inspect",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/native/running": true,
+          "/structuredContent/launches_application": false
+        },
+        "required_result_paths": [
+          "/structuredContent/native/windows"
+        ]
+      }
+    },
+    {
+      "id": "read-sequence",
+      "probe": "workflow",
+      "access": "read_only",
+      "repetitions": 3,
+      "steps": [
+        {
+          "tool": "dimension_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/native/running": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        },
+        {
+          "tool": "dimension_inspect",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/native/running": true,
+              "/structuredContent/launches_application": false
+            },
+            "required_result_paths": [
+              "/structuredContent/native/windows"
+            ]
+          }
+        },
+        {
+          "tool": "dimension_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/native/running": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

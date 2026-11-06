@@ -123,6 +123,30 @@ uv run --locked ruff check .
 Tests that drive the real applications run only when their `CAVI_*_NATIVE` variable is
 set; the rest use recorded responses and never launch an application.
 
+## MCP evaluation
+
+```sh
+uv sync --locked --dev
+npm install --no-audit --no-fund --package-lock=false
+npm run eval
+```
+
+MCP Eval follows `cavi-ai/mcp-eval` on GitHub `main`. The protocol gate probes
+the four production stdio entry points for discovery and token budgets,
+pagination, declared surfaces, and protocol negotiation. The simulated gate
+uses the production tool handlers with synthetic native adapters to check
+status and inspection values, output schemas, and repeated read sequences.
+The unit suite also checks that each simulated server rejects paths outside
+the workspace and remains usable afterward.
+
+Use `npm run eval:protocol` or `npm run eval:simulated` to run one gate.
+Reports and evaluator version/source metadata are written under `.tmp/evals/`
+and uploaded by CI. Set `MCPEVAL_EXECUTABLE` to use a separately built evaluator;
+`MCPEVAL_SOURCE_REVISION` records its source revision when known. The npm wrapper
+downloads the native release named in its distribution manifest; following
+wrapper `main` alone does not build unreleased evaluator changes. These gates
+do not open Adobe apps or establish installed application readiness.
+
 ## License
 
 MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and
