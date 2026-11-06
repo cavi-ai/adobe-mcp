@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "animate_status",
+      "arguments": {}
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "animate_status",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false
+        }
+      }
+    }
+  ]
+}

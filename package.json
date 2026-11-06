@@ -5,7 +5,8 @@
   "scripts": {
     "eval": "uv run --locked python evals/run.py",
     "eval:protocol": "uv run --locked python evals/run.py --mode protocol",
-    "eval:simulated": "uv run --locked python evals/run.py --mode simulated"
+    "eval:simulated": "uv run --locked python evals/run.py --mode simulated",
+    "eval:native": "uv run --locked python -m evals.native"
   },
   "devDependencies": {
     "@cavi-ai/mcp-eval": "github:cavi-ai/mcp-eval#main"

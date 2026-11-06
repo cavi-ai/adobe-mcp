@@ -1,4 +1,4 @@
-"""Evaluate Adobe MCP catalogs and tools with synthetic native adapters."""
+"""Evaluate Adobe MCP catalogs, simulated tools, or background native reads."""
 
 import argparse
 import hashlib
@@ -12,12 +12,40 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVERS = ("authoring", "animate", "character_animator", "dimension")
+BACKGROUND_TOOLS = {
+    # Document inspection selects native documents internally; status only is background-safe.
+    "authoring": frozenset({"adobe_status"}),
+    "animate": frozenset({"animate_status"}),
+    "character_animator": frozenset({"character_status", "inspect"}),
+    "dimension": frozenset({"dimension_status", "dimension_inspect"}),
+}
+
+
+def background_manifest(server, manifest):
+    """Refuse probes outside the reviewed background read APIs before starting a server."""
+    for case in manifest["probes"]:
+        if case["access"] != "read_only":
+            raise ValueError("Native background probes must be read-only")
+        if case["probe"] == "workflow":
+            tools = [step["tool"] for step in case["steps"]]
+        elif case["probe"] in {"output-schema", "instruction-fidelity"}:
+            tools = [case["tool"]]
+        else:
+            raise ValueError(f"Unsupported native background probe: {case['probe']}")
+        if not set(tools) <= BACKGROUND_TOOLS[server]:
+            raise ValueError(f"Unsupported native background tool in {server}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("all", "protocol", "simulated"), default="all")
+    parser.add_argument("--mode", choices=("all", "protocol", "simulated", "native-background"),
+                        default="all")
     args = parser.parse_args()
+    if args.mode == "native-background":
+        for server in SERVERS:
+            suffix = "background" if server in {"authoring", "animate"} else "inspection"
+            background_manifest(server, json.loads(
+                (ROOT / f"evals/{server}.{suffix}.manifest.json").read_text()))
     selected = os.environ.get("MCPEVAL_EXECUTABLE", str(ROOT / "node_modules/.bin/mcpeval"))
     executable = shutil.which(selected)
     if executable is None:
@@ -44,9 +72,11 @@ def main():
         env = dict(os.environ, MCPEVAL_HOME=store)
         for mode in modes:
             for server in SERVERS:
-                suffix = "" if mode == "protocol" else ".simulated"
-                command = (["-m", f"cavi_adobe_mcp.{server}_server"] if mode == "protocol" else
-                           [str(ROOT / "evals/simulated_server.py"), server])
+                suffix = "" if mode == "protocol" else ".inspection"
+                if mode == "native-background" and server in {"authoring", "animate"}:
+                    suffix = ".background"
+                command = ([str(ROOT / "evals/simulated_server.py"), server] if mode == "simulated"
+                           else ["-m", f"cavi_adobe_mcp.{server}_server"])
                 key = f"{server}-{mode}"
                 with (output / f"{key}.json").open("w") as stream:
                     result = subprocess.run([

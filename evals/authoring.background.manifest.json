@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "photoshop"
+      }
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "photoshop"
+      },
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false,
+          "/structuredContent/authenticates": false
+        }
+      }
+    },
+    {
+      "id": "status-schema-illustrator",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "illustrator"
+      }
+    },
+    {
+      "id": "status-outcome-illustrator",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "illustrator"
+      },
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false,
+          "/structuredContent/authenticates": false
+        }
+      }
+    }
+  ]
+}
