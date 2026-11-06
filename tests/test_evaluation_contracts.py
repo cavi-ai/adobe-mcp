@@ -21,6 +21,30 @@ class EvaluationDescriptionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_arguments_are_rejected_at_the_mcp_boundary(self):
+        cases = (
+            ("authoring", "adobe_status", {"application": "photoshop"}),
+            ("animate", "animate_status", {}),
+            ("character_animator", "character_status", {}),
+            ("dimension", "dimension_status", {}),
+        )
+        for server, tool, arguments in cases:
+            with self.subTest(server=server):
+                parameters = StdioServerParameters(command=sys.executable, args=[
+                    str(ROOT / "evals/simulated_server.py"), server])
+                async with stdio_client(parameters) as (reader, writer), \
+                        ClientSession(reader, writer) as client:
+                    await client.initialize()
+                    rejected = await client.call_tool(tool, {**arguments, "unknown_setting": True})
+                    self.assertTrue(rejected.is_error, "Unknown arguments must not be ignored")
+                    error = rejected.structured_content["error"]
+                    self.assertEqual(error["code"], "INVALID_ARGUMENT")
+                    self.assertEqual(error["outcome"], "rejected")
+                    self.assertFalse(error["retry_safe"])
+                    accepted = await client.call_tool(tool, arguments)
+                    self.assertFalse(accepted.is_error)
+                    self.assertFalse(accepted.structured_content["launches_application"])
+
     async def test_rejected_paths_leave_each_session_usable(self):
         cases = (
             ("authoring", "adobe_open_copy", {"application": "photoshop", "source": "../input.psd",

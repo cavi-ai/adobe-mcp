@@ -375,6 +375,47 @@ class AnimateTransportTests(unittest.TestCase):
         self.assertEqual(response["operation_id"], operation_id)
         self.assertEqual(observed["calls"], 1)
 
+    def test_native_receipt_is_validated_after_prompt_handler_timeout(self):
+        state = {"running": True, "process": {"pid": 123, "started": "fixture"}}
+        self.authoring.dispatcher = None
+        self.authoring.app_path = self.fake_app()
+        self.authoring.store.mkdir(mode=0o700)
+        for index, (receipt_id, helper_failure, expected) in enumerate((
+            ("match", "timeout", "success"),
+            ("foreign", "timeout", "receipt identity"),
+            ("missing", "timeout", "timed out"),
+            ("match", "authentication", "authentication"),
+        )):
+            with self.subTest(receipt_id=receipt_id, helper_failure=helper_failure):
+                operation_id = str(index) * 32
+                response = self.authoring.store / ("dispatch-" + operation_id) / "response.json"
+
+                def handle(*_args, response=response, operation_id=operation_id,
+                           receipt_id=receipt_id, helper_failure=helper_failure):
+                    if receipt_id != "missing":
+                        response.write_text(json.dumps({"version": 1,
+                            "operation_id": operation_id if receipt_id == "match" else "f" * 32,
+                            "ok": True, "result": {"documents": []}}))
+                    if helper_failure == "timeout":
+                        try:
+                            raise subprocess.TimeoutExpired(["native-helper"], 5)
+                        except subprocess.TimeoutExpired as exc:
+                            raise AnimateUnknown("chooser handler timed out") from exc
+                    raise AnimateUnknown("authentication prompt was refused")
+
+                with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
+                        patch("cavi_adobe_mcp.animate_authoring.subprocess.run",
+                              return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                        patch.object(self.authoring, "status", return_value=state), \
+                        patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"), \
+                        patch.object(self.authoring, "_handle_jsfl_prompt", side_effect=handle):
+                    request = {"version": 1, "operation": "inspect", "operation_id": operation_id}
+                    if expected == "success":
+                        self.assertEqual(self.authoring._native(request)["result"], {"documents": []})
+                    else:
+                        with self.assertRaisesRegex(AnimateUnknown, expected):
+                            self.authoring._native(request)
+
 
 if __name__ == "__main__":
     unittest.main()

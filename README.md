@@ -147,6 +147,31 @@ downloads the native release named in its distribution manifest; following
 wrapper `main` alone does not build unreleased evaluator changes. These gates
 do not open Adobe apps or establish installed application readiness.
 
+Run the background native gate on a licensed macOS host with Photoshop,
+Illustrator, Animate, Character Animator, and Dimension already running:
+
+```sh
+npm run eval:native -- --workspace /absolute/native-fixtures \
+  --ae-recipe after-effects.json
+```
+
+The workspace must contain an After Effects render recipe with its genuine AEP
+and declared dependencies. The recipe uses the same
+fields as `after_effects_render`, including an existing straight-alpha RGBA PNG
+output module. The gate exercises real Character Animator and Dimension inspection,
+Photoshop, Illustrator and Animate installation/process status, headless After Effects
+rendering, and FFmpeg review export. MCP Eval checks the declared background read
+schemas and values. The command refuses tool calls outside its background allowlist
+before dispatch. It does not launch GUI apps, activate or raise windows, send input,
+run JSFL launchers, capture windows, or submit Dimension renders.
+It writes source hashes, installed app versions, calls, journals and results into
+a new `native-eval-*` directory in that workspace. Hosted CI runs the protocol
+and simulated gates; the native command fails when explicitly selected on an
+unsupported host, with missing inputs/apps, or on any required native failure.
+It never signs in, requests permissions, or retries
+an unknown operation. Keep native records private: observations can include
+existing document names and project paths.
+
 ## License
 
 MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and

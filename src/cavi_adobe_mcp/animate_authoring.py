@@ -235,7 +235,16 @@ class AnimateAuthoring:
             if self.status().get("process") != state.get("process"):
                 raise AnimateUnknown("Animate process identity changed after opening the launcher")
             if not response_path.exists():
-                self._handle_jsfl_prompt(state["process"], request["operation_id"], launcher_path.name)
+                try:
+                    self._handle_jsfl_prompt(state["process"], request["operation_id"], launcher_path.name)
+                except AnimateUnknown as exc:
+                    # Animate can finish while the chooser observer is still waiting.
+                    # A timed-out observer does not invalidate an exact native receipt;
+                    # validate it below without dispatching the operation again. Explicit
+                    # helper refusals (including authentication prompts) remain failures.
+                    if (not isinstance(exc.__cause__, subprocess.TimeoutExpired)
+                            or not response_path.exists()):
+                        raise
             while True:
                 if cancelled is not None and cancelled.is_set() and not cancel_path.exists():
                     cancel_path.touch(mode=0o600)
