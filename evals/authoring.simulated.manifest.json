@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "photoshop"
+      }
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_status",
+      "arguments": {
+        "application": "photoshop"
+      },
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false,
+          "/structuredContent/authenticates": false
+        }
+      }
+    },
+    {
+      "id": "inspect-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "adobe_inspect",
+      "arguments": {
+        "application": "photoshop"
+      }
+    },
+    {
+      "id": "inspect-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_inspect",
+      "arguments": {
+        "application": "photoshop"
+      },
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/runtime/running": true,
+          "/structuredContent/pending_operation": null
+        },
+        "required_result_paths": [
+          "/structuredContent/documents"
+        ]
+      }
+    },
+    {
+      "id": "read-sequence",
+      "probe": "workflow",
+      "access": "read_only",
+      "repetitions": 3,
+      "steps": [
+        {
+          "tool": "adobe_status",
+          "arguments": {
+            "application": "photoshop"
+          },
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false,
+              "/structuredContent/authenticates": false
+            }
+          }
+        },
+        {
+          "tool": "adobe_inspect",
+          "arguments": {
+            "application": "photoshop"
+          },
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/runtime/running": true,
+              "/structuredContent/pending_operation": null
+            },
+            "required_result_paths": [
+              "/structuredContent/documents"
+            ]
+          }
+        },
+        {
+          "tool": "adobe_status",
+          "arguments": {
+            "application": "photoshop"
+          },
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false,
+              "/structuredContent/authenticates": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

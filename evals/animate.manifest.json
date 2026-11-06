@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "discovery-budget",
+      "probe": "discovery-cost",
+      "access": "read_only",
+      "max_tools": 10,
+      "max_schema_bytes": 12000
+    },
+    {
+      "id": "token-budget",
+      "probe": "token-cost",
+      "access": "read_only",
+      "max_total_tokens": 6000,
+      "max_tool_tokens": 3000
+    },
+    {
+      "id": "catalog-pagination",
+      "probe": "pagination",
+      "access": "read_only",
+      "max_pages": 2
+    },
+    {
+      "id": "declared-surfaces",
+      "probe": "surface-listing",
+      "access": "read_only",
+      "max_pages": 2
+    },
+    {
+      "id": "protocol-version",
+      "probe": "protocol-negotiation",
+      "access": "read_only",
+      "bogus_version": "2099-01-01"
+    }
+  ]
+}

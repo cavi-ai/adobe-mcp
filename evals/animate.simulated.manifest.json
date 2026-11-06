@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "animate_status",
+      "arguments": {}
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "animate_status",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false
+        }
+      }
+    },
+    {
+      "id": "inspect-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "animate_inspect",
+      "arguments": {}
+    },
+    {
+      "id": "inspect-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "animate_inspect",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/launches_application": false,
+          "/structuredContent/pending_operation": null
+        },
+        "required_result_paths": [
+          "/structuredContent/native/documents"
+        ]
+      }
+    },
+    {
+      "id": "read-sequence",
+      "probe": "workflow",
+      "access": "read_only",
+      "repetitions": 3,
+      "steps": [
+        {
+          "tool": "animate_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        },
+        {
+          "tool": "animate_inspect",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/launches_application": false,
+              "/structuredContent/pending_operation": null
+            },
+            "required_result_paths": [
+              "/structuredContent/native/documents"
+            ]
+          }
+        },
+        {
+          "tool": "animate_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
