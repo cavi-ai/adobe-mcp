@@ -4,16 +4,23 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-09
+
 ### Added
 
-- `CAVI_PHOTOSHOP_APP`, `CAVI_ILLUSTRATOR_APP` and `CAVI_ANIMATE_APP` choose the application bundle; an override naming another application is refused with `APP_IDENTITY_MISMATCH`.
+- Select Photoshop, Illustrator, and Animate bundles with application-specific environment overrides.
+- Abandon an unknown Character Animator operation after its application instances exit.
 
 ### Changed
 
-- The package version is read from the release tag.
-- Requires Python 3.15 or newer; CI lints on Linux and runs the unit tests once, on macOS with Python 3.15; a green `main` dispatches `server-merged` to game-art-pipeline, whose pin bot moves it to that commit. Dialogue and editorial WAV input still refuses float PCM, which Python 3.15's `wave` now reads.
-- Every server finds its application through `cavi-mcp-core` application lookup; without an override the newest installed version is used, including for Character Animator.
-- A missing Photoshop or Illustrator reports `APP_UNAVAILABLE` instead of `INPUT_NOT_FOUND`.
+- Requires Python 3.15 or newer.
+- Use MCP Core application discovery and report unavailable or mismatched application bundles explicitly.
+
+### Fixed
+
+- Preserve Character Animator import and export chooser state and verify export-folder navigation.
+- Release Character Animator ownership after application exit when no operation is pending.
+- Retain completed Animate operation receipts and reject undeclared tool arguments.
 
 ## 0.3.1 - 2026-11-04
 
