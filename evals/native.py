@@ -14,21 +14,13 @@ from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from PIL import Image
 
+from cavi_adobe_mcp import art_media as media
 from evals.run import BACKGROUND_TOOLS
 
 ROOT = Path(__file__).resolve().parents[1]
-ALLOWED_TOOLS = frozenset.union(*BACKGROUND_TOOLS.values()) | {
-    "after_effects_render", "media_review_movie"}
-
-
-def inside(workspace, value):
-    if Path(value).is_absolute() or ".." in Path(value).parts:
-        raise ValueError("Use workspace-relative native fixture paths without traversal")
-    path = (workspace / value).resolve(strict=True)
-    if not path.is_relative_to(workspace) or not path.is_file():
-        raise ValueError("Native fixtures must be regular files inside the selected workspace")
-    return path
+ALLOWED_TOOLS = frozenset.union(*BACKGROUND_TOOLS.values()) | {"media_review_movie"}
 
 
 def check_prompts(value):
@@ -82,16 +74,23 @@ class NativeRun:
                     if ready is not True:
                         raise RuntimeError(f"{tool} requires an already-running licensed app")
 
-    async def render_media(self, recipe):
+    async def review_movie(self):
+        frames = self.output / "frames"
+        frames.mkdir()
+        for index, color in enumerate(((240, 10, 0, 255), (0, 220, 90, 128))):
+            Image.new("RGBA", (64, 48), color).save(frames / f"frame{index}.png")
+        media.write(frames / "recipe.json", {
+            "version": 1, "name": "Review", "fps": {"numerator": 24, "denominator": 1},
+            "alpha": "straight", "loop": False,
+            "frames": [{"name": f"Frame{i}", "path": self.destination(f"frames/frame{i}.png")} for i in (0, 1)]})
+        pinned = media.ingest(self.workspace, self.destination("frames/recipe.json"), self.destination("media"))
         async with stdio_client(self.server("authoring")) as (reader, writer), \
                 ClientSession(reader, writer, read_timeout_seconds=330) as client:
             await client.initialize()
-            rendered = await self.call(client, "after_effects_render", {
-                "recipe": recipe, "directory": self.destination("after-effects")})
             movie = await self.call(client, "media_review_movie", {
-                "receipt": rendered["receipt"], "directory": self.destination("movie")})
-            if int(movie["stream"]["nb_read_frames"]) != rendered["frame_count"]:
-                raise RuntimeError("Native review movie frame count differs from the render")
+                "receipt": pinned["receipt"], "directory": self.destination("movie")})
+            if int(movie["stream"]["nb_read_frames"]) != pinned["frame_count"]:
+                raise RuntimeError("Native review movie frame count differs from its frames")
 
     def destination(self, name):
         return self.output.relative_to(self.workspace).as_posix() + "/" + name
@@ -100,7 +99,6 @@ class NativeRun:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, required=True)
-    parser.add_argument("--ae-recipe", required=True, help="Workspace-relative real AEP render recipe")
     args = parser.parse_args(argv)
     if sys.platform != "darwin":
         parser.error("Native evaluation requires macOS and the installed licensed Adobe applications")
@@ -108,9 +106,6 @@ def main(argv=None):
         workspace = args.workspace.resolve(strict=True)
         if not args.workspace.is_absolute() or not workspace.is_dir():
             raise ValueError("Select an existing absolute native fixture workspace")
-        recipe = inside(workspace, args.ae_recipe)
-        if recipe.suffix != ".json":
-            raise ValueError("Select a real AEP recipe JSON")
         if shutil.which(os.environ.get(
                 "MCPEVAL_EXECUTABLE", str(ROOT / "node_modules/.bin/mcpeval"))) is None:
             raise ValueError("Install MCP Eval or set MCPEVAL_EXECUTABLE before native evaluation")
@@ -127,8 +122,7 @@ def main(argv=None):
     metadata = {"source_sha": source, "source_sha256": {
         path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sources if path.is_file() and path.suffix in {".py", ".jsx", ".jsfl", ".swift", ".json"}
-    }, "fixtures_sha256": {str(p.relative_to(workspace)): hashlib.sha256(p.read_bytes()).hexdigest()
-                            for p in (recipe,)}}
+    }}
     applications = {}
     for app in Path("/Applications").glob("Adobe*/*.app"):
         info_path = app / "Contents/Info.plist"
@@ -137,7 +131,6 @@ def main(argv=None):
             if info.get("CFBundleIdentifier") in {
                 "com.adobe.Photoshop", "com.adobe.illustrator", "com.adobe.Adobe-Animate-2024.application",
                 "com.adobe.Character-Animator.application", "com.adobe.dimension",
-                "com.adobe.AfterEffects.application",
             }:
                 applications[info["CFBundleIdentifier"]] = info.get("CFBundleShortVersionString")
     metadata["installed_versions"] = applications
@@ -148,7 +141,7 @@ def main(argv=None):
                             "illustrator": "installation_and_process_status",
                             "animate": "installation_and_process_status",
                             "character_animator": "native_inspection", "dimension": "native_inspection",
-                            "after_effects": "headless_render", "ffmpeg": "headless_review_movie"}}
+                            "ffmpeg": "headless_review_movie"}}
     try:
         asyncio.run(native.check_installed())
         inspected = subprocess.run([sys.executable, str(ROOT / "evals/run.py"),
@@ -158,7 +151,7 @@ def main(argv=None):
         if inspected.returncode:
             raise RuntimeError("Native inspection evaluation failed")
         summary["inspection"] = json.loads(inspected.stdout)
-        asyncio.run(native.render_media(args.ae_recipe))
+        asyncio.run(native.review_movie())
         summary["passed"] = True
     except Exception as exc:  # noqa: BLE001 -- retain native failure evidence and exit nonzero
         summary["error"] = f"{type(exc).__name__}: {exc}"

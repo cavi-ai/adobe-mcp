@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cavi-adobe-mcp"
 dynamic = ["version"]
-description = "MCP servers for Adobe Photoshop, Illustrator, After Effects, Animate, Character Animator and Dimension"
+description = "MCP servers for Adobe Photoshop, Illustrator, Animate, Character Animator and Dimension"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -16,7 +16,6 @@ keywords = [
     "mcp-server",
     "photoshop",
     "illustrator",
-    "after-effects",
     "animate",
     "character-animator",
     "dimension",

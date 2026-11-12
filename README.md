@@ -1,13 +1,13 @@
 # Cavi Adobe MCP
 
-Local MCP servers for Adobe Photoshop, Illustrator, After Effects, Animate, Character
-Animator and Dimension. Each server edits owned copies of documents inside one
+Local MCP servers for Adobe Photoshop, Illustrator, Animate, Character Animator and
+Dimension. Each server edits owned copies of documents inside one
 workspace, records every native operation before it runs, and reports an uncertain
 outcome as unknown instead of retrying it.
 
 | Command | Server name | Applications |
 |---|---|---|
-| `cavi-adobe-authoring-mcp` | `cavi-adobe-authoring` | Photoshop, Illustrator, After Effects (`aerender`), FFmpeg review movies |
+| `cavi-adobe-authoring-mcp` | `cavi-adobe-authoring` | Photoshop, Illustrator, FFmpeg review movies |
 | `cavi-animate-mcp` | `cavi-animate-authoring` | Animate |
 | `cavi-character-animator-mcp` | `cavi-character-animator-mcp` | Character Animator |
 | `cavi-dimension-mcp` | `cavi-adobe-dimension` | Dimension |
@@ -70,8 +70,7 @@ keep them private.
 - Authoring: `adobe_status`, `adobe_inspect`, `adobe_open_copy`, `adobe_create_canvas`,
   `adobe_edit_layers`, `adobe_resize_image`, `adobe_add_group`, `adobe_place_image`, `adobe_add_rectangle`,
   `adobe_add_path`, `adobe_add_text`, `adobe_apply_mask`, `adobe_fonts`, `adobe_export`,
-  `adobe_close_copy`, `adobe_operation_control`, `after_effects_render`,
-  `media_review_movie`.
+  `adobe_close_copy`, `adobe_operation_control`, `media_review_movie`.
 - Animate: `animate_status`, `animate_inspect`, `animate_open_copy`,
   `animate_create_from_png`, `animate_set_stage_size_from_source`, `animate_edit_timeline`,
   `animate_export_frames`, `animate_close_copy`, `animate_operation_control`.
@@ -151,16 +150,12 @@ Run the background native gate on a licensed macOS host with Photoshop,
 Illustrator, Animate, Character Animator, and Dimension already running:
 
 ```sh
-npm run eval:native -- --workspace /absolute/native-fixtures \
-  --ae-recipe after-effects.json
+npm run eval:native -- --workspace /absolute/native-fixtures
 ```
 
-The workspace must contain an After Effects render recipe with its genuine AEP
-and declared dependencies. The recipe uses the same
-fields as `after_effects_render`, including an existing straight-alpha RGBA PNG
-output module. The gate exercises real Character Animator and Dimension inspection,
-Photoshop, Illustrator and Animate installation/process status, headless After Effects
-rendering, and FFmpeg review export. MCP Eval checks the declared background read
+The gate exercises real Character Animator and Dimension inspection,
+Photoshop, Illustrator and Animate installation/process status, and FFmpeg review
+export of generated RGBA frames. MCP Eval checks the declared background read
 schemas and values. The command refuses tool calls outside its background allowlist
 before dispatch. It does not launch GUI apps, activate or raise windows, send input,
 run JSFL launchers, capture windows, or submit Dimension renders.
@@ -174,5 +169,5 @@ existing document names and project paths.
 
 ## License
 
-MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and
+MIT. Adobe, Photoshop, Illustrator, Animate, Character Animator and
 Dimension are trademarks of Adobe Inc.; this project is not affiliated with Adobe.

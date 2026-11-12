@@ -4,6 +4,10 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Removed
+
+- The `after_effects_render` tool; the native gate exports generated frames and no longer takes `--ae-recipe`.
+
 ## 0.4.0 - 2026-11-09
 
 ### Added

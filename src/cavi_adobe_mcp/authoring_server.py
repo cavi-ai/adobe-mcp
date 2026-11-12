@@ -14,7 +14,7 @@ from .config import workspace
 from .contracts import Result
 
 mcp = Server("cavi-adobe-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(
-    "Explicit local Photoshop/Illustrator edits on new owned PSD/AI copies, After Effects renders "
+    "Explicit local Photoshop/Illustrator edits on new owned PSD/AI copies "
     "and FFmpeg review movies. Server startup never launches applications. Start with status; "
     "native Adobe document operations require an already running app and local Automation access. "
     "Never sign in or retry an unknown outcome. Keep .adobe-authoring state private."
@@ -69,19 +69,6 @@ class MovieExport(Result):
     stream: dict
     execution: dict
     visual_acceptance: Literal["unreviewed"]
-    launches_applications: Literal[True]
-
-
-class AERender(Result):
-    status: Literal["inputs_unchanged"]
-    receipt: str
-    sha256: str
-    frame_count: int
-    fps: dict[str, int]
-    execution: dict
-    composition: str
-    timing_authority: Literal["caller_declared"]
-    dependencies_authority: Literal["caller_declared"]
     launches_applications: Literal[True]
 
 
@@ -251,17 +238,6 @@ def adobe_apply_mask(application: App, session_id: str, layer_path: LayerPath,
                      expected_name: str, path_name: str) -> AdobeMutation:
     """Apply a retained named path as a PS layer mask or Illustrator clipping group."""
     return invoke(app(application).apply_mask, session_id, layer_path, expected_name, path_name)
-
-
-@mcp.tool(annotations=WRITE)
-def after_effects_render(recipe: str, directory: str) -> AERender:
-    """Launch aerender for one declared AEP comp/range into a new PNG directory, at most 300s/8GiB.
-
-    Recipe declares complete dependencies, rational FPS and an existing straight-alpha RGBA PNG
-    output module. Never reuses an artist's AE instance. Timing/dependency declarations are supplied
-    by the caller, not inferred from the proprietary AEP. Stop on any license/account prompt.
-    """
-    return invoke(native_media.ae_render, workspace(), recipe, directory)
 
 
 @mcp.tool(annotations=WRITE)
