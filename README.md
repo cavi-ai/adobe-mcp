@@ -1,27 +1,29 @@
 # Cavi Adobe MCP
 
-Local MCP servers for Adobe Photoshop, Illustrator, After Effects, Animate, Character
-Animator and Dimension. Each server edits owned copies of documents inside one
-workspace, records every native operation before it runs, and reports an uncertain
-outcome as unknown instead of retrying it.
+[![PyPI weekly downloads](https://img.shields.io/pypi/dw/cavi-adobe-mcp?label=PyPI%20downloads%2Fweek)](https://pypi.org/project/cavi-adobe-mcp/)
 
-| Command | Server name | Applications |
-|---|---|---|
-| `cavi-adobe-authoring-mcp` | `cavi-adobe-authoring` | Photoshop, Illustrator, After Effects (`aerender`), FFmpeg review movies |
-| `cavi-animate-mcp` | `cavi-animate-authoring` | Animate |
-| `cavi-character-animator-mcp` | `cavi-character-animator-mcp` | Character Animator |
-| `cavi-dimension-mcp` | `cavi-adobe-dimension` | Dimension |
+![A paper theatre with a fox arranging a whale and stars](media/adobe-mcp-hero.png)
 
-Startup and tool discovery never launch an application. A tool reaches an application
-only when it is called, and only an application that is already installed and licensed.
+## Keep the magic editable.
+
+Tell your assistant what to change. Keep the Photoshop layers, Illustrator paths and Animate timeline.
+
+Cavi Adobe MCP connects your MCP client to native Adobe projects through application-specific local servers, with editable working copies and supported animation and render handoffs.
+
+Ask for outcomes in your own words:
+
+- “Make a working copy of this illustration, add editable text and export a preview.”
+- “Build an Animate timeline from this artwork, then export its frames.”
+- “Render the prepared After Effects project and make a review movie.”
+
+Four local servers cover different jobs: Photoshop and Illustrator authoring, After Effects rendering and review movies; Animate timeline authoring; Character Animator project and scene workflows; and Dimension inspection and rendering. Their capabilities differ by application.
 
 ## Requirements
 
 - macOS, Python 3.15+ and [uv](https://docs.astral.sh/uv/).
-- The Adobe applications you use, installed and signed in. No license or account is
-  supplied by these servers.
+- The licensed Adobe applications you use, installed and signed in.
 - Automation access for the MCP host to control the application (Photoshop,
-  Illustrator, Animate). The servers never request permissions; they report a denial.
+  Illustrator, Animate).
 - Animate and Character Animator also use a small native helper compiled on first use,
   which needs the Swift command-line compiler (`xcode-select --install`) and existing
   Accessibility access. Character Animator capture also needs Screen Recording access.
@@ -32,6 +34,15 @@ only when it is called, and only an application that is already installed and li
 ```sh
 uv tool install cavi-adobe-mcp
 ```
+
+The package installs four commands:
+
+| Command | Application |
+|---|---|
+| `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and After Effects rendering |
+| `cavi-animate-mcp` | Animate |
+| `cavi-character-animator-mcp` | Character Animator |
+| `cavi-dimension-mcp` | Dimension |
 
 Register the servers you need in your MCP client and set the workspace:
 
@@ -65,52 +76,16 @@ application is refused with `APP_IDENTITY_MISMATCH`. Dimension is driven only at
 Ownership records live inside the workspace (`.adobe-authoring/`, `.animate-authoring/`);
 keep them private.
 
-## Tools
+<details>
+<summary>Application reference</summary>
 
-- Authoring: `adobe_status`, `adobe_inspect`, `adobe_open_copy`, `adobe_create_canvas`,
-  `adobe_edit_layers`, `adobe_resize_image`, `adobe_add_group`, `adobe_place_image`, `adobe_add_rectangle`,
-  `adobe_add_path`, `adobe_add_text`, `adobe_apply_mask`, `adobe_fonts`, `adobe_export`,
-  `adobe_close_copy`, `adobe_operation_control`, `after_effects_render`,
-  `media_review_movie`.
-- Animate: `animate_status`, `animate_inspect`, `animate_open_copy`,
-  `animate_create_from_png`, `animate_set_stage_size_from_source`, `animate_edit_timeline`,
-  `animate_export_frames`, `animate_close_copy`, `animate_operation_control`.
-- Character Animator: `character_status`, `session_control`, `project_select`,
-  `project_save_copy`, `inspect`, `capture`, `scene_action`, `scene_export`,
-  `import_media`, `export_inspect`, `export_ingest`, `operation_control`.
-- Dimension: `dimension_status`, `dimension_launch`, `dimension_inspect`,
-  `dimension_render_start`, `dimension_render_inspect`.
+Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Character Animator supports project, scene, capture and export workflows. Dimension supports inspection and rendering. After Effects rendering uses `aerender`; FFmpeg can create review movies.
 
-`import_media` submits PSD puppets through the native Import chooser and hands WAV copies
-to the already-running Character Animator app. A WAV handoff receipt is not import
-confirmation; verify that the audio appears in the project's Audio rows before continuing.
+Keep workspace ownership records private. Each native operation is recorded before it runs. If an operation reports an unknown outcome, inspect the application and outputs or reconcile the recorded operation before trying again.
 
-For a closed Character Animator project, use `project_prepare_copy` to copy its saved
-`.chproj` project and `Ch Data` tree into a new workspace destination. Pass the returned
-`prepared_copy_id` to `project_open_prepared_copy`, inspect the actual
-opened project root, then use `session_control(action="claim", prepared_copy_id=...)` to
-establish ownership before editing. Open and claim operate on that exact prepared copy.
+For a closed Character Animator project, prepare a copy with `project_prepare_copy`, open that prepared copy, inspect its project root and claim it with `session_control` before editing. A WAV handoff receipt does not confirm import: check that the audio appears in the project's Audio rows. After a process exits, the operation control and session control tools provide explicit reconciliation and lease release actions; they preserve unknown outcomes and project files.
 
-Every tool error returns one structured result (`code`, `outcome`, `next_action`) from
-[`cavi-mcp-core`](https://github.com/cavi-ai/mcp-core). An `unknown` outcome means the
-application may have changed: inspect it, or resolve the recorded operation with the
-server's `operation_control` tool, before trying again.
-
-When a pending Character Animator chooser is behind the app, the server activates the
-app and rechecks the recorded process, project, and exact chooser before continuing.
-For an unknown initial Save As whose app process has exited,
-`operation_control(action="reconcile_copy_after_exit")` can record that the destination
-is absent and no copy was verified; it does not report a successful save or a user cancellation.
-For an unknown operation on a first-hand owned project, `operation_control(action="abandon_after_exit")`
-archives the operation after two stable observations confirm that its original process and all Character Animator
-instances have exited. The operation remains recorded as unknown; project and media files are preserved.
-
-If Character Animator has exited and no operation is pending, release the original lease with
-`session_control(action="release", lease_id=...)`. The server verifies stable process absence
-and the unchanged owned project folder before removing the lease.
-
-Interrupted native chooser calls retain bounded attempt diagnostics under `CAVI_ADOBE_DATA`.
-These diagnostics do not establish completion or authorize a retry.
+</details>
 
 ## Development
 
@@ -120,59 +95,8 @@ uv run --locked python -m unittest discover -s tests
 uv run --locked ruff check .
 ```
 
-Tests that drive the real applications run only when their `CAVI_*_NATIVE` variable is
-set; the rest use recorded responses and never launch an application.
-
-## MCP evaluation
-
-```sh
-uv sync --locked --dev
-npm install --no-audit --no-fund --package-lock=false
-npm run eval
-```
-
-MCP Eval follows `cavi-ai/mcp-eval` on GitHub `main`. The protocol gate probes
-the four production stdio entry points for discovery and token budgets,
-pagination, declared surfaces, and protocol negotiation. The simulated gate
-uses the production tool handlers with synthetic native adapters to check
-status and inspection values, output schemas, and repeated read sequences.
-The unit suite also checks that each simulated server rejects paths outside
-the workspace and remains usable afterward.
-
-Use `npm run eval:protocol` or `npm run eval:simulated` to run one gate.
-Reports and evaluator version/source metadata are written under `.tmp/evals/`
-and uploaded by CI. Set `MCPEVAL_EXECUTABLE` to use a separately built evaluator;
-`MCPEVAL_SOURCE_REVISION` records its source revision when known. The npm wrapper
-downloads the native release named in its distribution manifest; following
-wrapper `main` alone does not build unreleased evaluator changes. These gates
-do not open Adobe apps or establish installed application readiness.
-
-Run the background native gate on a licensed macOS host with Photoshop,
-Illustrator, Animate, Character Animator, and Dimension already running:
-
-```sh
-npm run eval:native -- --workspace /absolute/native-fixtures \
-  --ae-recipe after-effects.json
-```
-
-The workspace must contain an After Effects render recipe with its genuine AEP
-and declared dependencies. The recipe uses the same
-fields as `after_effects_render`, including an existing straight-alpha RGBA PNG
-output module. The gate exercises real Character Animator and Dimension inspection,
-Photoshop, Illustrator and Animate installation/process status, headless After Effects
-rendering, and FFmpeg review export. MCP Eval checks the declared background read
-schemas and values. The command refuses tool calls outside its background allowlist
-before dispatch. It does not launch GUI apps, activate or raise windows, send input,
-run JSFL launchers, capture windows, or submit Dimension renders.
-It writes source hashes, installed app versions, calls, journals and results into
-a new `native-eval-*` directory in that workspace. Hosted CI runs the protocol
-and simulated gates; the native command fails when explicitly selected on an
-unsupported host, with missing inputs/apps, or on any required native failure.
-It never signs in, requests permissions, or retries
-an unknown operation. Keep native records private: observations can include
-existing document names and project paths.
+Evaluation configuration is in [evals](evals/).
 
 ## License
 
-MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and
-Dimension are trademarks of Adobe Inc.; this project is not affiliated with Adobe.
+MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and Dimension are trademarks of Adobe Inc.; this project is not affiliated with Adobe.
