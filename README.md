@@ -2,7 +2,7 @@
 
 [![PyPI weekly downloads](https://img.shields.io/pypi/dw/cavi-adobe-mcp?label=PyPI%20downloads%2Fweek)](https://pypi.org/project/cavi-adobe-mcp/)
 
-![A paper theatre with a fox arranging a whale and stars](media/adobe-mcp-hero.png)
+![A paper theatre with a fox arranging a whale and stars](https://raw.githubusercontent.com/cavi-ai/adobe-mcp/main/media/adobe-mcp-hero.png)
 
 ## Keep the magic editable.
 
@@ -14,9 +14,20 @@ Ask for outcomes in your own words:
 
 - “Make a working copy of this illustration, add editable text and export a preview.”
 - “Build an Animate timeline from this artwork, then export its frames.”
-- “Render the prepared After Effects project and make a review movie.”
+- “Export the Animate frames and make a review movie.”
 
-Four local servers cover different jobs: Photoshop and Illustrator authoring, After Effects rendering and review movies; Animate timeline authoring; Character Animator project and scene workflows; and Dimension inspection and rendering. Their capabilities differ by application.
+Four local servers cover different jobs: Photoshop and Illustrator authoring and review movies; Animate timeline authoring; Character Animator project and scene workflows; and Dimension inspection and rendering. Their capabilities differ by application.
+
+## The Adobe suite
+
+Each larger application has its own package. Install the ones you use.
+
+| Applications | Package | Install |
+|---|---|---|
+| Photoshop, Illustrator, Animate, Character Animator, Dimension | Cavi Adobe MCP (this repository) | `uv tool install cavi-adobe-mcp` |
+| After Effects | [Cavi After Effects MCP](https://github.com/cavi-ai/after-effects-mcp) | `uv tool install cavi-after-effects-mcp` |
+| Premiere Pro | [Cavi Premiere MCP](https://github.com/cavi-ai/premiere-mcp) | `uv tool install cavi-premiere-mcp` |
+| Substance 3D Painter, Designer, Sampler | [Cavi Substance MCP](https://github.com/cavi-ai/substance-mcp) | `uv tool install cavi-substance-mcp` |
 
 ## Requirements
 
@@ -39,7 +50,7 @@ The package installs four commands:
 
 | Command | Application |
 |---|---|
-| `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and After Effects rendering |
+| `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and review movies |
 | `cavi-animate-mcp` | Animate |
 | `cavi-character-animator-mcp` | Character Animator |
 | `cavi-dimension-mcp` | Dimension |
@@ -79,7 +90,7 @@ keep them private.
 <details>
 <summary>Application reference</summary>
 
-Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Character Animator supports project, scene, capture and export workflows. Dimension supports inspection and rendering. After Effects rendering uses `aerender`; FFmpeg can create review movies.
+Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Character Animator supports project, scene, capture and export workflows. Dimension supports inspection and rendering. FFmpeg can create review movies.
 
 Keep workspace ownership records private. Each native operation is recorded before it runs. If an operation reports an unknown outcome, inspect the application and outputs or reconcile the recorded operation before trying again.
 
@@ -99,4 +110,4 @@ Evaluation configuration is in [evals](evals/).
 
 ## License
 
-MIT. Adobe, Photoshop, Illustrator, After Effects, Animate, Character Animator and Dimension are trademarks of Adobe Inc.; this project is not affiliated with Adobe.
+MIT. Adobe, Photoshop, Illustrator, After Effects, Premiere Pro, Substance 3D, Animate, Character Animator and Dimension are trademarks of Adobe Inc.; this project is not affiliated with Adobe.

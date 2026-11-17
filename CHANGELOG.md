@@ -4,6 +4,15 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Changed
+
+- Frame receipts and bounded native runs come from `cavi-mcp-core[media]` 0.1.4.
+- The README lists the After Effects, Premiere and Substance packages.
+
+### Removed
+
+- The `after_effects_render` tool, now in `cavi-after-effects-mcp`; the native gate exports generated frames and no longer takes `--ae-recipe`.
+
 ## 0.4.0 - 2026-11-09
 
 ### Added

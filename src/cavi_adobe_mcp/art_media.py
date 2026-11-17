@@ -2,152 +2,26 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
-import re
 import wave
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from cavi_mcp_core.media import (  # noqa: F401  (the receipt, used through this module)
+    SCHEMA,
+    digest,
+    frames,
+    ingest,
+    inside,
+    load,
+    name,
+    rate,
+    validate,
+    write,
+)
 from PIL import Image
 
-SCHEMA = "cavi.animation-media.v1"
 MAX_EXPANDED_PIXELS = 64 * 1024 * 1024
-
-
-def digest(path):
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def inside(workspace, path):
-    if not isinstance(path, (str, Path)) or not str(path) or "\x00" in str(path):
-        raise ValueError("Use a nonempty workspace path")
-    root = Path(workspace).resolve(strict=True)
-    result = (root / path).resolve()
-    if not result.is_relative_to(root) or result == root:
-        raise ValueError("Use a path inside the shared workspace")
-    return result
-
-
-def load(path):
-    if Path(path).stat().st_size > 4 * 1024 * 1024:
-        raise ValueError("JSON must be at most 4 MiB")
-    return json.loads(Path(path).read_text())
-
-
-def write(path, value):
-    with Path(path).open("x") as stream:
-        json.dump(value, stream, indent=2, allow_nan=False)
-        stream.write("\n")
-
-
-def name(value):
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value):
-        raise ValueError("Names must start with a letter and contain at most 64 ASCII letters, digits, _ or -")
-    return value
-
-
-def rate(value):
-    if (not isinstance(value, dict) or set(value) != {"numerator", "denominator"}
-            or any(type(x) is not int or not 1 <= x <= 120000 for x in value.values())
-            or not 1 <= value["numerator"] / value["denominator"] <= 120):
-        raise ValueError("Declare rational FPS numerator/denominator in 1..120 FPS")
-    divisor = math.gcd(value["numerator"], value["denominator"])
-    return {key: item // divisor for key, item in value.items()}
-
-
-def frames(workspace, value, *, pinned):
-    if not isinstance(value, list) or not 1 <= len(value) <= 1000:
-        raise ValueError("Declare 1..1000 ordered frames")
-    result, images, names, encoded, pixels = [], {}, set(), 0, 0
-    for frame in value:
-        required = {"name", "path", "sha256", "width", "height", "rect"} if pinned else {"name", "path"}
-        if (not isinstance(frame, dict) or not required <= set(frame)
-                or set(frame) - (required | {"rect"})):
-            raise ValueError("Unexpected or missing frame fields")
-        label = name(frame["name"])
-        if label in names:
-            raise ValueError("Frame names must be unique")
-        names.add(label)
-        path = inside(workspace, frame["path"])
-        if path not in images:
-            encoded += path.stat().st_size
-            if encoded > 256 * 1024 * 1024:
-                raise ValueError("Encoded PNG inputs exceed 256 MiB")
-            with path.open("rb") as stream:
-                header = stream.read(26)
-            if len(header) != 26 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[24:26] != b"\x08\x06":
-                raise ValueError("Use 8-bit RGBA PNGs; higher bit depths require an explicit source export")
-            with Image.open(path) as image:
-                if image.format != "PNG" or image.mode != "RGBA" or getattr(image, "n_frames", 1) != 1:
-                    raise ValueError("Use single-image RGBA PNGs with declared straight alpha")
-                width, height = image.size
-                pixels += width * height
-                if max(width, height) > 8192 or pixels > 32000000:
-                    raise ValueError("PNG inputs exceed the texture budget")
-                image.load()
-            images[path] = (width, height, digest(path))
-        width, height, sha = images[path]
-        if pinned and (frame["sha256"] != sha or frame["width"] != width or frame["height"] != height):
-            raise ValueError("Frame input changed: " + str(path))
-        rect = frame.get("rect", [0, 0, width, height])
-        if (not isinstance(rect, list) or len(rect) != 4 or any(type(x) is not int for x in rect)
-                or min(rect[:2]) < 0 or min(rect[2:]) < 1
-                or rect[0] + rect[2] > width or rect[1] + rect[3] > height):
-            raise ValueError("Frame rectangle is outside its PNG")
-        result.append({"name": label, "path": str(path.relative_to(Path(workspace).resolve())),
-                       "sha256": sha, "width": width, "height": height, "rect": rect})
-    return result
-
-
-def validate(workspace, receipt):
-    path = inside(workspace, receipt)
-    data = load(path)
-    if (data.get("schema") != SCHEMA or data.get("version") != 1 or data.get("alpha") != "straight"
-            or data.get("coordinate_origin") != "top_left" or type(data.get("loop")) is not bool):
-        raise ValueError("Unsupported animation media receipt")
-    name(data.get("name"))
-    fps = rate(data.get("fps"))
-    checked = frames(workspace, data.get("frames"), pinned=True)
-    if len(checked) * fps["denominator"] / fps["numerator"] > 300:
-        raise ValueError("Animation exceeds 300 seconds")
-    sources = data.get("sources", [])
-    if (not isinstance(sources, list) or len(sources) > 1066
-            or any(not isinstance(item, dict) or set(item) != {"path", "sha256"} for item in sources)):
-        raise ValueError("Invalid source fingerprints")
-    for item in sources:
-        if digest(inside(workspace, item["path"])) != item["sha256"]:
-            raise ValueError("Source changed: " + item["path"])
-    return {"status": "inputs_unchanged", "receipt": str(path), "sha256": digest(path),
-            "frame_count": len(checked), "fps": fps, "launches_applications": False}
-
-
-def ingest(workspace, recipe, directory):
-    """Pin explicitly ordered PNG frames or atlas rectangles and editable source files."""
-    source, target = inside(workspace, recipe), inside(workspace, directory)
-    spec = load(source)
-    if (not isinstance(spec, dict) or spec.get("version") != 1
-            or set(spec) - {"version", "name", "fps", "loop", "alpha", "frames", "sources"}
-            or spec.get("alpha") != "straight" or type(spec.get("loop")) is not bool):
-        raise ValueError("Declare version 1, straight alpha, loop, FPS and ordered frames")
-    fps, label = rate(spec.get("fps")), name(spec.get("name"))
-    checked = frames(workspace, spec.get("frames"), pinned=False)
-    if len(checked) * fps["denominator"] / fps["numerator"] > 300:
-        raise ValueError("Animation exceeds 300 seconds")
-    sources = spec.get("sources", [])
-    if (not isinstance(sources, list) or len(sources) > 64
-            or any(not isinstance(item, str) for item in sources)):
-        raise ValueError("Declare at most 64 source paths")
-    inputs = [source, *(inside(workspace, item) for item in sources)]
-    refs = [{"path": str(item.relative_to(Path(workspace).resolve())), "sha256": digest(item)} for item in inputs]
-    target.mkdir(parents=True, exist_ok=False)
-    output = target / "media.json"
-    write(output, {"schema": SCHEMA, "version": 1, "name": label, "fps": fps,
-                   "loop": spec["loop"], "alpha": "straight", "coordinate_origin": "top_left",
-                   "frames": checked, "sources": refs})
-    return validate(workspace, str(output))
 
 
 def _crop(workspace, frame):
