@@ -4,6 +4,8 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-16
+
 ### Changed
 
 - Frame receipts and bounded native runs come from `cavi-mcp-core[media]` 0.1.4.
