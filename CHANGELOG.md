@@ -4,6 +4,10 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Removed
+
+- The Character Animator server and its `cavi-character-animator-mcp` command, now in the `cavi-character-animator-mcp` package.
+
 ### Changed
 
 - Requires `cavi-mcp-core[media]` 0.1.8; the workspace root, path confinement, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.

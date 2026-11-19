@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cavi-adobe-mcp"
 dynamic = ["version"]
-description = "MCP servers for Adobe Photoshop, Illustrator, Animate, Character Animator and Dimension"
+description = "MCP servers for Adobe Photoshop, Illustrator, Animate and Dimension"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -17,7 +17,6 @@ keywords = [
     "photoshop",
     "illustrator",
     "animate",
-    "character-animator",
     "dimension",
     "game-art",
 ]
@@ -48,7 +47,6 @@ Changelog = "https://github.com/cavi-ai/adobe-mcp/blob/main/CHANGELOG.md"
 [project.scripts]
 cavi-adobe-authoring-mcp = "cavi_adobe_mcp.authoring_server:main"
 cavi-animate-mcp = "cavi_adobe_mcp.animate_server:main"
-cavi-character-animator-mcp = "cavi_adobe_mcp.character_animator_server:main"
 cavi-dimension-mcp = "cavi_adobe_mcp.dimension_server:main"
 
 [dependency-groups]

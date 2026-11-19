@@ -11,12 +11,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVERS = ("authoring", "animate", "character_animator", "dimension")
+SERVERS = ("authoring", "animate", "dimension")
 BACKGROUND_TOOLS = {
     # Document inspection selects native documents internally; status only is background-safe.
     "authoring": frozenset({"adobe_status"}),
     "animate": frozenset({"animate_status"}),
-    "character_animator": frozenset({"character_status", "inspect"}),
     "dimension": frozenset({"dimension_status", "dimension_inspect"}),
 }
 

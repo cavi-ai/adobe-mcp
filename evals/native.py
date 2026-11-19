@@ -61,7 +61,6 @@ class NativeRun:
             ("authoring", (("adobe_status", {"application": "photoshop"}),
                            ("adobe_status", {"application": "illustrator"}))),
             ("animate", (("animate_status", {}),)),
-            ("character_animator", (("character_status", {}),)),
             ("dimension", (("dimension_status", {}),)),
         ):
             async with stdio_client(self.server(module)) as (reader, writer), \
@@ -69,8 +68,7 @@ class NativeRun:
                 await client.initialize()
                 for tool, arguments in tools:
                     status = await self.call(client, tool, arguments)
-                    ready = (status.get("connected") if tool == "character_status" else
-                             status.get("native", status).get("running"))
+                    ready = status.get("native", status).get("running")
                     if ready is not True:
                         raise RuntimeError(f"{tool} requires an already-running licensed app")
 
@@ -114,7 +112,7 @@ def main(argv=None):
     output = Path(tempfile.mkdtemp(prefix="native-eval-", dir=workspace))
     data = output / "data"
     data.mkdir()
-    env = dict(os.environ, CAVI_ADOBE_WORKSPACE=str(workspace), CAVI_ADOBE_DATA=str(data))
+    env = dict(os.environ, CAVI_ADOBE_WORKSPACE=str(workspace))
     source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     sources = (sorted((ROOT / "src").rglob("*")) + sorted((ROOT / "evals").glob("*"))
                + sorted((ROOT / "tests").glob("*native.py"))
@@ -130,7 +128,7 @@ def main(argv=None):
             info = plistlib.loads(info_path.read_bytes())
             if info.get("CFBundleIdentifier") in {
                 "com.adobe.Photoshop", "com.adobe.illustrator", "com.adobe.Adobe-Animate-2024.application",
-                "com.adobe.Character-Animator.application", "com.adobe.dimension",
+                "com.adobe.dimension",
             }:
                 applications[info["CFBundleIdentifier"]] = info.get("CFBundleShortVersionString")
     metadata["installed_versions"] = applications
@@ -140,7 +138,7 @@ def main(argv=None):
                "coverage": {"photoshop": "installation_and_process_status",
                             "illustrator": "installation_and_process_status",
                             "animate": "installation_and_process_status",
-                            "character_animator": "native_inspection", "dimension": "native_inspection",
+                            "dimension": "native_inspection",
                             "ffmpeg": "headless_review_movie"}}
     try:
         asyncio.run(native.check_installed())

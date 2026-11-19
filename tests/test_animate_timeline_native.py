@@ -31,7 +31,7 @@ class TimelineNativeTests(unittest.TestCase):
             image.save(root/'orb.png')
             params=StdioServerParameters(command=sys.executable,
                 args=['-m','cavi_adobe_mcp.animate_server'],
-                env={**os.environ,'CAVI_ADOBE_DATA':str(root/'data'),'CAVI_ADOBE_WORKSPACE':str(root)})
+                env={**os.environ,'CAVI_ADOBE_WORKSPACE':str(root)})
             async with stdio_client(params) as (r,w), ClientSession(r,w,read_timeout_seconds=180) as client:
                 await client.initialize()
                 async def call(tool,**args):

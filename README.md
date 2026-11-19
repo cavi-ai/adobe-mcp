@@ -16,7 +16,7 @@ Ask for outcomes in your own words:
 - “Build an Animate timeline from this artwork, then export its frames.”
 - “Export the Animate frames and make a review movie.”
 
-Four local servers cover different jobs: Photoshop and Illustrator authoring and review movies; Animate timeline authoring; Character Animator project and scene workflows; and Dimension inspection and rendering. Their capabilities differ by application.
+Three local servers cover different jobs: Photoshop and Illustrator authoring and review movies; Animate timeline authoring; and Dimension inspection and rendering. Their capabilities differ by application.
 
 ## The Adobe suite
 
@@ -24,7 +24,8 @@ Each larger application has its own package. Install the ones you use.
 
 | Applications | Package | Install |
 |---|---|---|
-| Photoshop, Illustrator, Animate, Character Animator, Dimension | Cavi Adobe MCP (this repository) | `uv tool install cavi-adobe-mcp` |
+| Photoshop, Illustrator, Animate, Dimension | Cavi Adobe MCP (this repository) | `uv tool install cavi-adobe-mcp` |
+| Character Animator | [Cavi Character Animator MCP](https://github.com/cavi-ai/character-animator-mcp) | `uv tool install cavi-character-animator-mcp` |
 | After Effects | [Cavi After Effects MCP](https://github.com/cavi-ai/after-effects-mcp) | `uv tool install cavi-after-effects-mcp` |
 | Premiere Pro | [Cavi Premiere MCP](https://github.com/cavi-ai/premiere-mcp) | `uv tool install cavi-premiere-mcp` |
 | Substance 3D Painter, Designer, Sampler | [Cavi Substance MCP](https://github.com/cavi-ai/substance-mcp) | `uv tool install cavi-substance-mcp` |
@@ -35,9 +36,9 @@ Each larger application has its own package. Install the ones you use.
 - The licensed Adobe applications you use, installed and signed in.
 - Automation access for the MCP host to control the application (Photoshop,
   Illustrator, Animate).
-- Animate and Character Animator also use a small native helper compiled on first use,
+- Animate also uses a small native helper compiled on first use,
   which needs the Swift command-line compiler (`xcode-select --install`) and existing
-  Accessibility access. Character Animator capture also needs Screen Recording access.
+  Accessibility access.
 - `ffmpeg` and `ffprobe` on `PATH` or in Homebrew's directory for review movies.
 
 ## Install
@@ -46,13 +47,12 @@ Each larger application has its own package. Install the ones you use.
 uv tool install cavi-adobe-mcp
 ```
 
-The package installs four commands:
+The package installs three commands:
 
 | Command | Application |
 |---|---|
 | `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and review movies |
 | `cavi-animate-mcp` | Animate |
-| `cavi-character-animator-mcp` | Character Animator |
 | `cavi-dimension-mcp` | Dimension |
 
 Register the servers you need in your MCP client and set the workspace:
@@ -73,11 +73,9 @@ Register the servers you need in your MCP client and set the workspace:
 | Variable | Meaning |
 |---|---|
 | `CAVI_ADOBE_WORKSPACE` | Absolute directory every tool path is relative to. Required. |
-| `CAVI_ADOBE_DATA` | Private server state: native helper builds and Character Animator journals. Defaults to `~/.local/share/cavi-adobe-mcp`. |
 | `CAVI_PHOTOSHOP_APP` | The Photoshop `.app` to use. |
 | `CAVI_ILLUSTRATOR_APP` | The Illustrator `.app` to use. |
 | `CAVI_ANIMATE_APP` | The Animate 2024 `.app` to use. |
-| `CAVI_CHARACTER_ANIMATOR_APP` | The Character Animator `.app` to use. |
 
 Without an override each server uses the newest installed version under `/Applications`
 with the application's bundle identifier. An override is final: one that names another
@@ -90,11 +88,9 @@ keep them private.
 <details>
 <summary>Application reference</summary>
 
-Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Character Animator supports project, scene, capture and export workflows. Dimension supports inspection and rendering. FFmpeg can create review movies.
+Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Dimension supports inspection and rendering. FFmpeg can create review movies.
 
 Keep workspace ownership records private. Each native operation is recorded before it runs. If an operation reports an unknown outcome, inspect the application and outputs or reconcile the recorded operation before trying again.
-
-For a closed Character Animator project, prepare a copy with `project_prepare_copy`, open that prepared copy, inspect its project root and claim it with `session_control` before editing. A WAV handoff receipt does not confirm import: check that the audio appears in the project's Audio rows. After a process exits, the operation control and session control tools provide explicit reconciliation and lease release actions; they preserve unknown outcomes and project files.
 
 </details>
 
