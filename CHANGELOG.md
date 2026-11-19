@@ -6,12 +6,16 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ### Changed
 
-- Requires `cavi-mcp-core[media]` 0.1.7; the workspace root, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.
-- A timed-out `osascript`, `open` or `swiftc` command is stopped with every process it started.
+- Requires `cavi-mcp-core[media]` 0.1.8; the workspace root, path confinement, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.
+- A timed-out `osascript`, `open`, `swiftc` or native helper command is stopped with every process it started.
+- Tool results are built on the `cavi-mcp-core` `Result` model: an optional field the tool did not set is left out instead of sent as `null`.
+- Photoshop and Illustrator errors are `cavi-mcp-core` `OperationRejected` and `OperationUnknown`.
 
 ### Fixed
 
 - `media_review_movie` finds `ffmpeg` and `ffprobe` where Homebrew installs them when the server's `PATH` leaves that directory out.
+- An interrupted Character Animator helper call stops the processes the helper started, not only the helper.
+- The 0.4.0 section lists four Character Animator fixes that were filed under a second Unreleased heading.
 
 ## 0.5.0 - 2026-11-16
 
@@ -41,6 +45,10 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 - Preserve Character Animator import and export chooser state and verify export-folder navigation.
 - Release Character Animator ownership after application exit when no operation is pending.
 - Retain completed Animate operation receipts and reject undeclared tool arguments.
+- Use nonblocking project-file inspection for Character Animator ownership checks.
+- Retain bounded attempt diagnostics after interrupted native chooser calls.
+- Keep Character Animator ownership responses stable while opening a prepared project copy.
+- Activate the exact owned background chooser before continuing its recorded operation.
 
 ## 0.3.1 - 2026-11-04
 
@@ -70,16 +78,6 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 ### Fixed
 
 - Reconcile an unknown initial Save As only after the matching Character Animator process exits and the destination remains absent.
-
-## Unreleased
-
-### Fixed
-
-- Release an owned Character Animator lease after app exit when no operation is pending.
-- Use nonblocking project-file inspection for Character Animator ownership checks.
-- Retain bounded attempt diagnostics after interrupted native chooser calls.
-- Keep Character Animator ownership responses stable while opening a prepared project copy.
-- Activate the exact owned background chooser before continuing its recorded operation.
 
 ## 0.2.0 - 2026-11-04
 

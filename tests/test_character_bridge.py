@@ -1,12 +1,22 @@
 """Native bridge request identity serialization tests."""
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from cavi_adobe_mcp.character_bridge import CharacterUnknown, NativeBridge
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class _InputCapture:
@@ -140,46 +150,31 @@ class CharacterBridgeRequestTests(unittest.TestCase):
             self.assertEqual(len(context["attempt_id"]), 32)
             self.assertEqual(Path(context["progress_path"]).stat().st_mode & 0o777, 0o600)
 
-    def test_interrupted_atomic_attempt_retains_phase_trace(self):
+    @unittest.skipUnless(os.name == "posix", "needs a shell helper and process groups")
+    def test_interrupted_attempt_retains_phase_trace_and_stops_what_the_helper_started(self):
         trace = '{"event":"observe_tree_progress","nodes":64}\n'
-
-        class _InterruptedProcess(_CompletedProcess):
-            def __init__(self, stdout, operation):
-                super().__init__(stdout, operation)
-                self.returncode = None
-
-            def poll(self):
-                return self.returncode
-
-            def terminate(self):
-                self.returncode = -15
-
-            def wait(self, timeout=None):
-                return self.returncode
-
-            def kill(self):
-                self.returncode = -9
-
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory) / "runtime"
             runtime.mkdir()
+            child = Path(directory) / "child.pid"
             helper = Path(directory) / "native-helper"
-            helper.write_bytes(b"fixture helper")
-
-            def popen(_args, *, stderr, **_kwargs):
-                stderr.write(trace.encode())
-                stderr.flush()
-                return _InterruptedProcess(None, "continue_chooser")
+            helper.write_text(f"#!/bin/sh\nprintf '%s\\n' '{trace.strip()}' >&2\n"
+                              f"sleep 60 &\necho $! > '{child}'\nwait\n")
+            helper.chmod(0o755)
 
             with (patch("cavi_adobe_mcp.character_bridge.application",
                         return_value=(Path("/Applications/Adobe Character Animator 2026.app"), {})),
                   patch.object(NativeBridge, "executable", return_value=helper),
-                  patch("cavi_adobe_mcp.character_bridge.subprocess.Popen", side_effect=popen),
                   self.assertRaises(CharacterUnknown) as raised):
-                NativeBridge(runtime, timeout=0.01).call(
+                NativeBridge(runtime, timeout=3).call(
                     "continue_chooser", {"operation_id": "a" * 32, "kind": "import"})
             context = raised.exception.native_context
             self.assertTrue(Path(context["progress_path"]).is_file())
+            started = int(child.read_text())
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and _alive(started):
+                time.sleep(.05)
+            self.assertFalse(_alive(started))
 
         self.assertEqual(context["phase"], "transport_interrupted")
         self.assertIsNone(context["submission_may_have_started"])

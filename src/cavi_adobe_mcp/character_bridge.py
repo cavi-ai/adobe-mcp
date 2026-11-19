@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,13 @@ class CharacterRejected(OperationRejected):
 
 class CharacterUnknown(OperationUnknown):
     """Application state must be inspected before another mutation."""
+
+
+def _signal_group(pid, number):
+    try:
+        os.killpg(pid, number)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def application():
@@ -125,12 +133,14 @@ class NativeBridge:
                         raise CharacterUnknown("Native adapter returned an invalid response") from exc
                 finally:
                     if process.poll() is None:
-                        process.terminate()
+                        # The helper leads its own session; signal everything it started.
+                        _signal_group(process.pid, signal.SIGTERM)
                         try:
                             process.wait(timeout=2)
                         except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait(timeout=2)
+                            pass
+                        _signal_group(process.pid, signal.SIGKILL)
+                        process.wait(timeout=2)
                     if progress_log:
                         progress_output.close()
         if (not isinstance(result, dict) or result.get("version") != 1

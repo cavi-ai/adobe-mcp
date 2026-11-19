@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Literal
 
 from cavi_mcp_core import apps, proc
-from cavi_mcp_core.files import load_json
+from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
+from cavi_mcp_core.files import inside, load_json
 from cavi_mcp_core.journal import archive, completion, fingerprint
 from cavi_mcp_core.journal import write_json as _write_json
 from cavi_mcp_core.lock import FileLock
@@ -42,11 +43,11 @@ SNAPSHOT_FIELDS = ("name", "path", "native_id", "identity", "saved", "width", "h
                    "units", "color_profile", "color_space", "bit_depth", "layers", "paths")
 
 
-class AdobeCommandRejected(ValueError):
+class AdobeCommandRejected(OperationRejected):
     """Native preflight rejected a command before any document mutation."""
 
 
-class AdobeOutcomeUnknown(RuntimeError):
+class AdobeOutcomeUnknown(OperationUnknown):
     """A command may have executed; inspect the app and outputs, never retry it."""
 
 
@@ -197,14 +198,7 @@ class AdobeAuthoring:
         self.store = self.workspace / ".adobe-authoring"
 
     def _path(self, value, *, suffix=None, exists=False):
-        if (not isinstance(value, str) or not value or ".." in Path(value).parts
-                or any(ord(c) < 32 for c in value)):
-            raise ValueError("Use a workspace path without parent traversal or control characters")
-        logical = self.workspace / value
-        path = logical.resolve()
-        if (not path.is_relative_to(self.workspace) or path == self.workspace
-                or logical != path):
-            raise ValueError("Paths must remain inside the workspace without symlinks")
+        path = inside(self.workspace, value, strict=True)
         if suffix and path.suffix.lower() not in suffix:
             raise ValueError("Unsupported file extension")
         if exists:

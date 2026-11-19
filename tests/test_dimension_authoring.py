@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from cavi_mcp_core import proc
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.server.mcpserver.exceptions import ToolError
@@ -74,8 +75,8 @@ class DimensionBridgeTests(unittest.TestCase):
             packet = {"version": 1, "operation": "inspect", "ok": True,
                       "result": {"running": True, "windows": []}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.subprocess.run", return_value=__import__("subprocess").CompletedProcess(
-                        [str(binary)], 0, json.dumps(packet), "")) as run:
+                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                        0, json.dumps(packet), "")) as run:
                 self.assertEqual(bridge.call("inspect"), packet["result"])
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"operation": "inspect"})
 
@@ -90,14 +91,14 @@ class DimensionBridgeTests(unittest.TestCase):
                           "bundle_path": "/Applications/Adobe Dimension/Adobe Dimension.app",
                           "launches_application": False}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.subprocess.run", return_value=__import__("subprocess").CompletedProcess(
-                        [str(binary)], 0, json.dumps(packet), "")) as run:
+                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                        0, json.dumps(packet), "")) as run:
                 self.assertEqual(bridge.call("launch"), packet["result"])
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"version": 1, "operation": "launch"})
             packet["result"]["bundle_path"] = "/Applications/Other.app"
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.subprocess.run", return_value=__import__("subprocess").CompletedProcess(
-                        [str(binary)], 0, json.dumps(packet), "")), \
+                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                        0, json.dumps(packet), "")), \
                     self.assertRaises(DimensionUnknown):
                 bridge.call("launch")
 
@@ -112,8 +113,8 @@ class DimensionBridgeTests(unittest.TestCase):
             request = {"workspace": directory, "source": directory + "/render.dn",
                        "directory": directory, "basename": "render"}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.subprocess.run", return_value=__import__("subprocess").CompletedProcess(
-                        [str(binary)], 0, json.dumps(packet), "")) as run, \
+                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                        0, json.dumps(packet), "")) as run, \
                     self.assertRaises(DimensionRejected):
                 bridge.render_start(request, IDENTITY)
             sent = json.loads(run.call_args.kwargs["input"])
@@ -130,8 +131,8 @@ class DimensionBridgeTests(unittest.TestCase):
                                 "outcome": "unknown", "retry_safe": False,
                                 "phase": "wait_for_document_view", "render_dispatched": True}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.subprocess.run", return_value=__import__("subprocess").CompletedProcess(
-                        [str(binary)], 0, json.dumps(packet), "")), \
+                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                        0, json.dumps(packet), "")), \
                     self.assertRaises(DimensionUnknown) as caught:
                 bridge.render_start({"workspace": directory}, IDENTITY)
             self.assertEqual(caught.exception.error_code, "NATIVE_WORKFLOW_FAILURE")

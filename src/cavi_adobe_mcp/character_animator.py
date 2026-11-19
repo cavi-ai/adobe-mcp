@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -17,7 +16,9 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from cavi_mcp_core.files import inside
 from cavi_mcp_core.journal import fingerprint, write_json
+from cavi_mcp_core.lock import FileLock
 
 from .character_bridge import CharacterRejected, CharacterUnknown, NativeBridge
 
@@ -54,20 +55,20 @@ class CharacterAnimator:
     @contextmanager
     def locked(self, cancelled=None):
         cancelled = cancelled or threading.Event()
-        descriptor = os.open(self.directory / "session.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(descriptor, "a") as stream:
-            deadline = time.monotonic() + 15
-            while True:
-                if cancelled.is_set():
-                    raise CharacterRejected("Cancelled before acquiring application ownership")
-                try:
-                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise CharacterRejected("Another Character Animator request is still active")
-                    time.sleep(.05)
+        lock = FileLock(self.directory / "session.lock", follow=False)
+        deadline = time.monotonic() + 15
+        while True:
+            if cancelled.is_set():
+                raise CharacterRejected("Cancelled before acquiring application ownership")
+            if lock.acquire(blocking=False):
+                break
+            if time.monotonic() >= deadline:
+                raise CharacterRejected("Another Character Animator request is still active")
+            time.sleep(.05)
+        try:
             yield
+        finally:
+            lock.release()
 
     def read(self, name):
         path = self.directory / name
@@ -237,13 +238,11 @@ class CharacterAnimator:
             raise CharacterRejected("Lease or pending operation changed before stopped-app release")
 
     def path(self, value, *, new=False):
-        if (not isinstance(value, str) or not value or any(ord(c) < 32 for c in value)
-                or ".." in Path(value).parts):
-            raise CharacterRejected("Use a workspace path without traversal or control characters")
-        logical = self.workspace / value
-        path = logical.resolve()
-        if logical != path or not path.is_relative_to(self.workspace) or path == self.workspace:
-            raise CharacterRejected("Paths must stay inside the shared workspace without symlinks")
+        try:
+            path = inside(self.workspace, value, strict=True)
+        except ValueError as exc:
+            raise CharacterRejected("Use a path inside the shared workspace without traversal, "
+                                    "symlinks or control characters") from exc
         if new and path.exists():
             raise CharacterRejected("Output must not already exist")
         return path

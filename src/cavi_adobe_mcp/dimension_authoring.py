@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
 import shutil
 import stat
-import subprocess
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from cavi_mcp_core import apps
+from cavi_mcp_core import apps, proc
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
-from cavi_mcp_core.files import load_json
+from cavi_mcp_core.files import inside, load_json
 from cavi_mcp_core.journal import write_json
+from cavi_mcp_core.lock import FileLock
 from cavi_mcp_core.media import digest
 from PIL import Image
 
@@ -79,11 +78,10 @@ class DimensionBridge:
     def _call(self, request, expected_operation):
         binary = self._executable()
         try:
-            result = subprocess.run([str(binary)], input=json.dumps(request),
-                                    capture_output=True, text=True,
-                                    timeout=max(self.timeout, 60) if expected_operation == "render_start" else self.timeout,
-                                    check=False)
-        except subprocess.TimeoutExpired as exc:
+            result = proc.run_sync(
+                [binary], max(self.timeout, 60) if expected_operation == "render_start" else self.timeout,
+                input=json.dumps(request))
+        except TimeoutError as exc:
             raise DimensionUnknown("Dimension request timed out; inspect the existing render job") from exc
         if result.returncode:
             raise DimensionUnknown("Dimension adapter did not return a native receipt: " + result.stderr[-1000:])
@@ -169,11 +167,10 @@ class DimensionAuthoring:
         if (not isinstance(value, str) or not value or Path(value).is_absolute()
                 or any(ord(c) < 32 for c in value) or ".." in Path(value).parts):
             raise DimensionRejected("Use a workspace-relative path without traversal or control characters")
-        logical = self.workspace / value
-        path = logical.resolve()
-        if (not path.is_relative_to(self.workspace) or path == self.workspace
-                or logical != path):
-            raise DimensionRejected("Paths must stay inside the workspace without symlinks")
+        try:
+            path = inside(self.workspace, value, strict=True)
+        except ValueError as exc:
+            raise DimensionRejected("Paths must stay inside the workspace without symlinks") from exc
         if suffix and path.suffix.lower() not in suffix:
             raise DimensionRejected("Unsupported file extension")
         if exists and (not path.is_file() or path.is_symlink()):
@@ -198,16 +195,17 @@ class DimensionAuthoring:
         lock_path = self.store / "lock"
         if lock_path.is_symlink():
             raise DimensionRejected("Dimension lock must not be a symlink", "STATE_UNSAFE")
-        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(descriptor, "a+") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise DimensionRejected("Another Dimension render request is active", "JOB_BUSY") from exc
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        lock = FileLock(lock_path, follow=False)
+        try:
+            taken = lock.acquire(blocking=False)
+        except OSError as exc:
+            raise DimensionRejected("Dimension lock must not be a symlink", "STATE_UNSAFE") from exc
+        if not taken:
+            raise DimensionRejected("Another Dimension render request is active", "JOB_BUSY")
+        try:
+            yield
+        finally:
+            lock.release()
 
     def _active_path(self):
         return self.store / "active.json"

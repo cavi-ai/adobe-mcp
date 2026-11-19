@@ -2,6 +2,7 @@
 
 from typing import Annotated, Literal
 
+from cavi_mcp_core.contracts import Result
 from cavi_mcp_core.server import DESTRUCTIVE as MUTATE
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
@@ -11,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from . import adobe_authoring, native_media
 from .config import workspace
-from .contracts import Result
 
 mcp = Server("cavi-adobe-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Explicit local Photoshop/Illustrator edits on new owned PSD/AI copies "
