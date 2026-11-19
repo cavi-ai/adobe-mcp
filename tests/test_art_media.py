@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
+from cavi_mcp_core import apps
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
@@ -121,6 +122,19 @@ class MediaTests(unittest.TestCase):
                 with self.subTest(action=action.__name__), self.assertRaisesRegex(ValueError, "expanded RGBA"):
                     action(self.root, result["receipt"], "oversized")
                 self.assertFalse((self.root / "oversized").exists())
+
+    def test_review_movie_finds_ffmpeg_where_homebrew_installs_it(self):
+        brew = self.root / "brew"
+        brew.mkdir()
+        for name in ("ffmpeg", "ffprobe"):
+            (brew / name).write_text("#!/bin/sh\nexit 3\n")
+            (brew / name).chmod(0o755)
+        result = media.ingest(self.root, "recipe.json", "ingest")
+        with (patch.dict(os.environ, {"PATH": str(self.root / "empty")}),
+              patch.object(apps, "HOMEBREW", (brew,)),
+              self.assertRaises(native_media.MediaOutcomeUnknown)):
+            native_media.review_movie(self.root, result["receipt"], "movie")
+        self.assertEqual(media.load(self.root / "movie/execution.json")["exit_code"], 3)
 
     def test_native_process_failure_retains_unknown_execution(self):
         directory = self.root / "process"

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import unquote, urlparse
 
+from cavi_mcp_core import proc
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
@@ -304,7 +305,7 @@ class AnimateTransportTests(unittest.TestCase):
         state = {"running": True, "process": {"pid": 123}}
         observed = {}
 
-        def launch(argv, **_kwargs):
+        def launch(argv, *_args, **_kwargs):
             observed["open_calls"] = observed.get("open_calls", 0) + 1
             observed["argv"] = argv
             self.assertEqual(Path(argv[-1]).name, "animate-" + request["operation_id"] + ".jsfl")
@@ -322,13 +323,13 @@ class AnimateTransportTests(unittest.TestCase):
             response_path.write_text(json.dumps({"version": 1, "operation_id": request["operation_id"],
                                                  "ok": True, "result": {"status": "synthetic"}}))
             self.assertFalse(self.local(cancel_uri).exists())
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            return proc.Result(0, "", "")
 
         self.authoring.dispatcher = None
         self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
         with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                patch("cavi_adobe_mcp.animate_authoring.subprocess.run", side_effect=launch), \
+                patch("cavi_adobe_mcp.animate_authoring.proc.run_sync", side_effect=launch), \
                 patch.object(self.authoring, "status", return_value=state), \
                 patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"):
             response = self.authoring._native(request)
@@ -345,13 +346,13 @@ class AnimateTransportTests(unittest.TestCase):
                    "expected_process": state["process"]}
         observed = {}
 
-        def launch(argv, **_kwargs):
+        def launch(argv, *_args, **_kwargs):
             launcher_path = Path(argv[-1])
             self.assertEqual(launcher_path.name, f"animate-{operation_id}.jsfl")
             literals = re.findall(r'"(?:\\.|[^"\\])*"', launcher_path.read_text())
             _, _, _, response_uri, _ = map(json.loads, literals)
             observed["response"] = self.local(response_uri)
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            return proc.Result(0, "", "")
 
         def handle(process, observed_operation_id, launcher):
             self.assertEqual(process, state["process"])
@@ -366,7 +367,7 @@ class AnimateTransportTests(unittest.TestCase):
         self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
         with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                patch("cavi_adobe_mcp.animate_authoring.subprocess.run", side_effect=launch), \
+                patch("cavi_adobe_mcp.animate_authoring.proc.run_sync", side_effect=launch), \
                 patch.object(self.authoring, "status", return_value=state), \
                 patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"), \
                 patch.object(self.authoring, "_handle_jsfl_prompt", side_effect=handle):
@@ -404,8 +405,8 @@ class AnimateTransportTests(unittest.TestCase):
                     raise AnimateUnknown("authentication prompt was refused")
 
                 with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                        patch("cavi_adobe_mcp.animate_authoring.subprocess.run",
-                              return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                        patch("cavi_adobe_mcp.animate_authoring.proc.run_sync",
+                              return_value=proc.Result(0, "", "")), \
                         patch.object(self.authoring, "status", return_value=state), \
                         patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"), \
                         patch.object(self.authoring, "_handle_jsfl_prompt", side_effect=handle):

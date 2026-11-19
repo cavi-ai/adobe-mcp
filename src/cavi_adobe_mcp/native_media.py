@@ -1,10 +1,9 @@
 """Bounded native process runs and free FFmpeg review exports."""
 
 import json
-import shutil
-import subprocess
 from fractions import Fraction
 
+from cavi_mcp_core import apps, proc
 from cavi_mcp_core.media import MediaOutcomeUnknown, run
 
 from . import art_media as media
@@ -19,9 +18,10 @@ def review_movie(workspace, receipt, directory, codec="prores_alpha"):
     if len({tuple(f["rect"][2:]) for f in data["frames"]}) != 1:
         raise ValueError("Review frames must share dimensions")
     media.export_budget(data)
-    binary, probe = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    binary, probe = apps.program("ffmpeg"), apps.program("ffprobe")
     if not binary or not probe:
         raise ValueError("Install the free FFmpeg and ffprobe executables")
+    binary, probe = str(binary), str(probe)
     target.mkdir(parents=True, exist_ok=False)
     for index, frame in enumerate(data["frames"]):
         with media._crop(workspace, frame) as crop:
@@ -41,9 +41,11 @@ def review_movie(workspace, receipt, directory, codec="prores_alpha"):
                 else ["-c:v", "libx264", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p"])
     try:
         execution = run([*command, str(movie)], target)
-        checked = subprocess.run([probe, "-v", "error", "-count_frames", "-select_streams", "v:0",
-                                  "-show_entries", "stream=codec_name,pix_fmt,nb_read_frames,avg_frame_rate,width,height",
-                                  "-of", "json", str(movie)], capture_output=True, text=True, check=True, timeout=15)
+        checked = proc.run_sync([probe, "-v", "error", "-count_frames", "-select_streams", "v:0",
+                                 "-show_entries", "stream=codec_name,pix_fmt,nb_read_frames,avg_frame_rate,width,height",
+                                 "-of", "json", str(movie)], 15)
+        if checked.returncode:
+            raise OSError("ffprobe failed: " + proc.diagnostics(checked))
         stream, = json.loads(checked.stdout)["streams"]
         width, height = data["frames"][0]["rect"][2:]
         expected_size = (width, height) if codec == "prores_alpha" else (width + width % 2, height + height % 2)
@@ -60,5 +62,5 @@ def review_movie(workspace, receipt, directory, codec="prores_alpha"):
         result["launches_applications"] = True
         media.write(target / "movie.json", result)
         return result
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError) as exc:
         raise MediaOutcomeUnknown("Movie export started; inspect its directory before continuing: " + str(exc)) from exc

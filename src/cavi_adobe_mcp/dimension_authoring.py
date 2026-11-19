@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -17,7 +16,9 @@ from pathlib import Path
 
 from cavi_mcp_core import apps
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
+from cavi_mcp_core.files import load_json
 from cavi_mcp_core.journal import write_json
+from cavi_mcp_core.media import digest
 from PIL import Image
 
 from . import native
@@ -39,11 +40,6 @@ class DimensionRejected(OperationRejected):
 
 class DimensionUnknown(OperationUnknown):
     """The native render may have been submitted; inspect the same job before retrying."""
-
-
-def digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 
@@ -232,7 +228,7 @@ class DimensionAuthoring:
             raise DimensionUnknown("Dimension active job journal is unsafe", "STATE_UNSAFE")
         if not active_path.is_file():
             return None
-        active = json.loads(active_path.read_text())
+        active = load_json(active_path)
         if active.get("operation_id") != operation_id:
             active_id = active.get("operation_id")
             if isinstance(active_id, str) and JOB_ID.fullmatch(active_id):
@@ -246,7 +242,7 @@ class DimensionAuthoring:
         write_json(job_path, record)
         active_path = self._active_path()
         if active_path.is_file() and not active_path.is_symlink():
-            active = json.loads(active_path.read_text())
+            active = load_json(active_path)
             if active.get("operation_id") == record.get("operation_id"):
                 active.update(state="unknown", updated_at=time.time())
                 write_json(active_path, active)
@@ -286,7 +282,7 @@ class DimensionAuthoring:
             active_id = None
             if active_path.is_file() and not active_path.is_symlink():
                 try:
-                    active_id = json.loads(active_path.read_text()).get("operation_id")
+                    active_id = load_json(active_path).get("operation_id")
                 except (OSError, ValueError, AttributeError):
                     pass
             if isinstance(active_id, str) and JOB_ID.fullmatch(active_id):
@@ -397,7 +393,7 @@ class DimensionAuthoring:
         with self._locked():
             if job_path.is_symlink() or not job_path.is_file():
                 raise DimensionRejected("Dimension render operation is missing or unsafe")
-            record = json.loads(job_path.read_text())
+            record = load_json(job_path)
             if (record.get("operation_id") != operation_id or record.get("workspace") != str(self.workspace)):
                 raise DimensionRejected("Dimension render operation identity does not match this workspace")
             if record.get("state") in {"complete", "unsupported"}:
@@ -458,7 +454,7 @@ class DimensionAuthoring:
                 record.update(state="unsupported", updated_at=time.time(), receipt=receipt)
                 write_json(job_path, record)
                 if active is not None:
-                    current = json.loads(active_path.read_text())
+                    current = load_json(active_path)
                     if current.get("operation_id") == operation_id:
                         active_path.unlink()
                 return receipt
@@ -505,7 +501,7 @@ class DimensionAuthoring:
             record.update(state="complete", updated_at=time.time(), receipt=receipt)
             write_json(job_path, record)
             if active is not None:
-                current = json.loads(active_path.read_text())
+                current = load_json(active_path)
                 if current.get("operation_id") == operation_id:
                     active_path.unlink()
             return receipt

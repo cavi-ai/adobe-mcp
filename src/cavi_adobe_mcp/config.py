@@ -3,19 +3,15 @@
 import os
 from pathlib import Path
 
+from cavi_mcp_core.workspace import root
+
 WORKSPACE = "CAVI_ADOBE_WORKSPACE"
 DATA = "CAVI_ADOBE_DATA"
 
 
 def workspace() -> str:
     """The absolute workspace every tool path is relative to, from ``CAVI_ADOBE_WORKSPACE``."""
-    value = os.environ.get(WORKSPACE, "")
-    if not value:
-        raise ValueError(f"Set {WORKSPACE} to the absolute workspace directory")
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        raise ValueError(f"{WORKSPACE} must be an absolute path")
-    return str(path.resolve())
+    return str(root(WORKSPACE))
 
 
 def data_dir() -> Path:

@@ -4,6 +4,15 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Changed
+
+- Requires `cavi-mcp-core[media]` 0.1.7; the workspace root, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.
+- A timed-out `osascript`, `open` or `swiftc` command is stopped with every process it started.
+
+### Fixed
+
+- `media_review_movie` finds `ffmpeg` and `ffprobe` where Homebrew installs them when the server's `PATH` leaves that directory out.
+
 ## 0.5.0 - 2026-11-16
 
 ### Changed

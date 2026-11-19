@@ -6,8 +6,6 @@ run only in an already running app; this module never launches or signs into one
 
 from __future__ import annotations
 
-import fcntl
-import hashlib
 import json
 import math
 import os
@@ -15,7 +13,6 @@ import re
 import shutil
 import stat
 import struct
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -24,9 +21,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
-from cavi_mcp_core import apps
+from cavi_mcp_core import apps, proc
+from cavi_mcp_core.files import load_json
 from cavi_mcp_core.journal import archive, completion, fingerprint
 from cavi_mcp_core.journal import write_json as _write_json
+from cavi_mcp_core.lock import FileLock
+from cavi_mcp_core.media import digest
 
 App = Literal["photoshop", "illustrator"]
 # app: (bundle identifier, /Applications glob, document suffix, override, name)
@@ -48,11 +48,6 @@ class AdobeCommandRejected(ValueError):
 
 class AdobeOutcomeUnknown(RuntimeError):
     """A command may have executed; inspect the app and outputs, never retry it."""
-
-
-def digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _number(value, name, low, high):
@@ -249,15 +244,13 @@ class AdobeAuthoring:
         location.mkdir(mode=0o700, exist_ok=True)
         if location.is_symlink() or location.stat().st_uid != os.getuid():
             raise ValueError("Unsafe Adobe lock directory")
-        with (location / "lock").open("a+") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ValueError("Another Adobe authoring operation is active") from exc
-            try:
-                yield location / "pending.json"
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        lock = FileLock(location / "lock")
+        if not lock.acquire(blocking=False):
+            raise ValueError("Another Adobe authoring operation is active")
+        try:
+            yield location / "pending.json"
+        finally:
+            lock.release()
 
     def _store(self):
         self.store.mkdir(mode=0o700, exist_ok=True)
@@ -303,9 +296,9 @@ class AdobeAuthoring:
                   + 'error "Application stopped"\ntell application id "' + APPS[self.app][0]
                   + '" to do javascript (item 2 of argv)\nend using terms from\nend run')
         try:
-            result = subprocess.run(["/usr/bin/osascript", "-e", bridge, str(script), script_text],
-                                    capture_output=True, text=True, timeout=self.timeout, check=False)
-        except subprocess.TimeoutExpired as exc:
+            result = proc.run_sync(["/usr/bin/osascript", "-e", bridge, str(script), script_text],
+                                   self.timeout)
+        except TimeoutError as exc:
             raise AdobeOutcomeUnknown("Adobe command timed out; inspect app, prompts and outputs") from exc
         if result.returncode:
             raise AdobeOutcomeUnknown("Adobe command failed; inspect app and authorization prompts: "
@@ -348,13 +341,13 @@ class AdobeAuthoring:
                 shutil.rmtree(directory)
                 self._reconcile_read_marker(pending, action, state, request)
             return {**result, "runtime": state,
-                    "pending_operation": json.loads(pending.read_text()) if pending.exists() else None}
+                    "pending_operation": load_json(pending) if pending.exists() else None}
 
     def _reconcile_read_marker(self, pending, action, state, request):
         """Resolve only a same-process unknown inspect after a later successful inspect."""
         if action != "inspect" or not pending.exists():
             return
-        prior = json.loads(pending.read_text())
+        prior = load_json(pending)
         if (prior.get("action") != "inspect" or prior.get("state") != "unknown"
                 or prior.get("workspace") != str(self.workspace)
                 or prior.get("process") != state["process"]
@@ -367,8 +360,8 @@ class AdobeAuthoring:
                   "reconciled_by_operation_id": request["operation_id"]}
         if archive.exists():
             try:
-                saved = json.loads(archive.read_text())
-            except (OSError, json.JSONDecodeError):
+                saved = load_json(archive)
+            except (OSError, ValueError):
                 return
             if (saved.get("resolution") != "read_only_reconciled"
                     or saved.get("prior") != prior):
@@ -625,7 +618,7 @@ class AdobeAuthoring:
             raise ValueError("Invalid operation ID")
         with self._locked() as pending:
             packet = self._session(session_id)
-            record = json.loads(pending.read_text())
+            record = load_json(pending)
             if (record.get("operation_id") != operation_id or record.get("session_id") != session_id
                     or record.get("workspace") != str(self.workspace)):
                 raise ValueError("No matching unresolved operation in this workspace")

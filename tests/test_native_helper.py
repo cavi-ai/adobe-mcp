@@ -106,7 +106,7 @@ class BuildHelperTests(unittest.TestCase):
               self.assertRaises(native.HelperError) as caught):
             native.build_helper(self.source, self.root / "state", "helper")
         self.assertEqual(caught.exception.code, "NATIVE_HELPER_BUILD_FAILED")
-        self.assertIsInstance(caught.exception.__cause__, subprocess.TimeoutExpired)
+        self.assertIsInstance(caught.exception.__cause__, TimeoutError)
         build = self.root / "state/native" / native.sha256(self.source)
         self.assertEqual(sorted(p.name for p in build.iterdir()), ["build.lock"])
 
