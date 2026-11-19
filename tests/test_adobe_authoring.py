@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import struct
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from cavi_mcp_core import proc
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -477,8 +477,8 @@ class AdobeAuthoringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder) / 'München Ω'
             directory.mkdir()
-            with patch('cavi_adobe_mcp.adobe_authoring.subprocess.run', return_value=subprocess.CompletedProcess(
-                    [], 0, stdout=json.dumps(response), stderr='')) as process:
+            with patch('cavi_adobe_mcp.adobe_authoring.proc.run_sync', return_value=proc.Result(
+                    0, json.dumps(response), '')) as process:
                 result = AdobeAuthoring._native(self.bridge, request, state, directory)
             script = next(directory.glob('*.jsx')).read_text()
             encoded = json.loads(script.split('var CAVI_REQUEST = ', 1)[1].split(';\n', 1)[0])

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
-import hashlib
 import json
 import math
 import os
@@ -20,9 +18,13 @@ from fractions import Fraction
 from pathlib import Path
 from threading import Event
 
-from cavi_mcp_core import apps
+from cavi_mcp_core import apps, proc
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
+from cavi_mcp_core.files import load_json
 from cavi_mcp_core.journal import archive, completion, fingerprint, write_json
+from cavi_mcp_core.lock import FileLock
+from cavi_mcp_core.media import digest
+from cavi_mcp_core.workspace import remove_tree
 from PIL import Image
 
 from . import art_media, native
@@ -42,11 +44,6 @@ class AnimateRejected(OperationRejected):
 
 class AnimateUnknown(OperationUnknown):
     """The native operation may have run; inspect app and outputs before continuing."""
-
-
-def digest(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def snapshot_receipt(workspace: Path, path: Path, result: dict):
@@ -127,18 +124,17 @@ class AnimateAuthoring:
         self.store.mkdir(mode=0o700, exist_ok=True)
         if self.store.is_symlink():
             raise AnimateRejected("Animate state directory must not be a symlink", "STATE_UNSAFE")
-        stream = (self.store / "lock").open("a+")
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        return stream
+        lock = FileLock(self.store / "lock")
+        lock.acquire()
+        return lock
 
     def _root_volume_name(self):
         if self._volume_name is not None:
             return self._volume_name
         try:
-            result = subprocess.run(["/usr/sbin/diskutil", "info", "-plist", "/"],
-                                    capture_output=True, timeout=5, check=False)
-            info = plistlib.loads(result.stdout) if result.returncode == 0 else {}
-        except (OSError, plistlib.InvalidFileException, subprocess.TimeoutExpired) as exc:
+            result = proc.run_sync(["/usr/sbin/diskutil", "info", "-plist", "/"], 5)
+            info = plistlib.loads(result.stdout.encode()) if result.returncode == 0 else {}
+        except (OSError, plistlib.InvalidFileException) as exc:
             raise AnimateRejected("Could not verify the macOS root volume name", "VOLUME_IDENTITY_UNAVAILABLE") from exc
         volume = info.get("VolumeName")
         if (not isinstance(volume, str) or not volume or "/" in volume
@@ -225,9 +221,9 @@ class AnimateAuthoring:
             if on_dispatch:
                 on_dispatch()
             try:
-                result = subprocess.run(["/usr/bin/open", "-a", str(self._app().path), "--", str(launcher_path)],
-                                        capture_output=True, text=True, timeout=min(self.timeout, 15), check=False)
-            except subprocess.TimeoutExpired as exc:
+                result = proc.run_sync(["/usr/bin/open", "-a", str(self._app().path), "--", str(launcher_path)],
+                                       min(self.timeout, 15))
+            except TimeoutError as exc:
                 raise AnimateUnknown("LaunchServices open timed out; inspect Animate and its pending operation") from exc
             if result.returncode:
                 raise AnimateUnknown("LaunchServices could not open the JSFL launcher: "
@@ -278,12 +274,11 @@ class AnimateAuthoring:
         lock = self._lock()
         try:
             pending_path = self.store / "pending.json"
-            pending = json.loads(pending_path.read_text()) if pending_path.is_file() else None
+            pending = load_json(pending_path) if pending_path.is_file() else None
             native = self._native({"version": 1, "operation": "inspect", "operation_id": uuid.uuid4().hex})
             return {"native": native["result"], "pending_operation": pending, "launches_application": False}
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
+            lock.release()
 
     def _session(self, session_id):
         if not isinstance(session_id, str) or not SESSION_ID.fullmatch(session_id):
@@ -349,7 +344,7 @@ class AnimateAuthoring:
                 receipt_dir.mkdir(mode=0o700, exist_ok=True)
                 write_json(receipt_dir / (operation_id + ".json"), record)
                 pending.unlink()
-                shutil.rmtree(self.store / ("dispatch-" + operation_id), ignore_errors=True)
+                remove_tree(self.store / ("dispatch-" + operation_id))
                 return {**result, "operation_id": operation_id, "retry_safe": False}
             except AnimateRejected:
                 if dispatched:
@@ -367,8 +362,7 @@ class AnimateAuthoring:
                     raise
                 raise AnimateUnknown("Animate outcome is unknown; inspect the app and pending journal") from exc
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
+            lock.release()
 
     def open_copy(self, source, destination, cancelled=None):
         source_path = self._path(source, suffix={".fla"}, exists=True)
@@ -463,7 +457,7 @@ class AnimateAuthoring:
                                 "staging_uri": stage_file.as_uri(), "source_uri": image.as_uri()},
                                 session=session, finalize=save, cancelled=cancelled)
         except AnimateRejected:
-            shutil.rmtree(stage_dir, ignore_errors=True)
+            remove_tree(stage_dir)
             raise
 
     def export_frames(self, session_id, directory, cancelled=None):
@@ -543,7 +537,7 @@ class AnimateAuthoring:
         lock = self._lock()
         pending = self.store / "pending.json"
         try:
-            record = json.loads(pending.read_text())
+            record = load_json(pending)
             if (record.get("operation_id") != operation_id or record.get("session_id") != session_id
                     or record.get("workspace") != str(self.workspace)):
                 raise ValueError("No matching unresolved operation")
@@ -599,8 +593,7 @@ class AnimateAuthoring:
             pending.unlink()
             return result
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
-            lock.close()
+            lock.release()
 
     def close_copy(self, session_id, cancelled=None):
         session = self._session(session_id)

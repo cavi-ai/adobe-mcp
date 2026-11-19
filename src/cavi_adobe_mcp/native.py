@@ -1,16 +1,15 @@
 """Compile the fixed Swift helpers on first use, each build pinned to its exact source."""
 
-import fcntl
-import hashlib
-import json
 import os
-import shutil
 import stat
-import subprocess
 import uuid
 from pathlib import Path
 
+from cavi_mcp_core import apps, proc
+from cavi_mcp_core.files import load_json
 from cavi_mcp_core.journal import write_json
+from cavi_mcp_core.lock import FileLock
+from cavi_mcp_core.media import digest as sha256
 
 # Cold optimized builds can take over a minute on Intel Macs.
 BUILD_TIMEOUT = 300
@@ -24,17 +23,11 @@ class HelperError(Exception):
         self.code = code
 
 
-def sha256(path) -> str:
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
 def _trusted(output: Path, receipt: Path, identity: str) -> bool:
     if not output.is_file() or output.is_symlink() or not receipt.is_file() or receipt.is_symlink():
         return False
     try:
-        return json.loads(receipt.read_text()) == {"source_sha256": identity,
-                                                   "sha256": sha256(output)}
+        return load_json(receipt) == {"source_sha256": identity, "sha256": sha256(output)}
     except (OSError, ValueError):
         return False
 
@@ -46,7 +39,7 @@ def build_helper(source: Path, directory: Path, name: str) -> Path:
     A cache holding anything else is refused, never replaced. Builds of one source are
     serialized, so concurrent servers never compile into the same directory at once.
     """
-    compiler = shutil.which("swiftc")
+    compiler = apps.program("swiftc")
     if not compiler:
         raise HelperError("Install the Swift command-line compiler (xcode-select --install) "
                           "to build the native helper", "NATIVE_HELPER_UNAVAILABLE")
@@ -60,8 +53,7 @@ def build_helper(source: Path, directory: Path, name: str) -> Path:
         raise HelperError("The native helper cache must not be a symbolic link",
                           "NATIVE_HELPER_UNSAFE")
     output, receipt = build / name, build / "build.json"
-    with (build / "build.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with FileLock(build / "build.lock"):
         if output.exists() or output.is_symlink() or receipt.exists() or receipt.is_symlink():
             if _trusted(output, receipt, identity):
                 return output
@@ -70,10 +62,8 @@ def build_helper(source: Path, directory: Path, name: str) -> Path:
         temporary = build / f".{name}-{uuid.uuid4().hex}.tmp"
         try:
             try:
-                result = subprocess.run([compiler, "-O", str(source), "-o", str(temporary)],
-                                        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                        timeout=BUILD_TIMEOUT, check=False)
-            except subprocess.TimeoutExpired as exc:
+                result = proc.run_sync([compiler, "-O", source, "-o", temporary], BUILD_TIMEOUT)
+            except TimeoutError as exc:
                 raise HelperError("Native helper compilation timed out",
                                   "NATIVE_HELPER_BUILD_FAILED") from exc
             if result.returncode or not temporary.is_file():

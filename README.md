@@ -38,7 +38,7 @@ Each larger application has its own package. Install the ones you use.
 - Animate and Character Animator also use a small native helper compiled on first use,
   which needs the Swift command-line compiler (`xcode-select --install`) and existing
   Accessibility access. Character Animator capture also needs Screen Recording access.
-- `ffmpeg` on `PATH` for review movies.
+- `ffmpeg` and `ffprobe` on `PATH` or in Homebrew's directory for review movies.
 
 ## Install
 
