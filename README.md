@@ -1,10 +1,10 @@
 # Cavi Adobe MCP
 
-[![PyPI weekly downloads](https://img.shields.io/pypi/dw/cavi-adobe-mcp?label=PyPI%20downloads%2Fweek)](https://pypi.org/project/cavi-adobe-mcp/)
+## Keep the magic editable.
 
 ![A paper theatre with a fox arranging a whale and stars](https://raw.githubusercontent.com/cavi-ai/adobe-mcp/main/media/adobe-mcp-hero.png)
 
-## Keep the magic editable.
+[![PyPI weekly downloads](https://img.shields.io/pypi/dw/cavi-adobe-mcp?label=PyPI%20downloads%2Fweek)](https://pypi.org/project/cavi-adobe-mcp/)
 
 Tell your assistant what to change. Keep the Photoshop layers, Illustrator paths and Animate timeline.
 
