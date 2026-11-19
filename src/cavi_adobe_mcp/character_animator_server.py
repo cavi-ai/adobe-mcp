@@ -4,6 +4,7 @@ import threading
 from typing import Annotated, Any, Literal
 
 import anyio.to_thread
+from cavi_mcp_core.contracts import Result
 from cavi_mcp_core.server import DESTRUCTIVE as MUTATE
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
@@ -15,7 +16,6 @@ from . import character_media
 from .character_animator import CharacterAnimator
 from .character_bridge import CharacterRejected, CharacterUnknown, NativeBridge
 from .config import data_dir, workspace
-from .contracts import Result
 
 mcp = Server("cavi-character-animator-mcp", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Controls the installed macOS Character Animator through a bounded native adapter. "

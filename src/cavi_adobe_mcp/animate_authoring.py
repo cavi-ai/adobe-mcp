@@ -9,7 +9,6 @@ import plistlib
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -20,7 +19,7 @@ from threading import Event
 
 from cavi_mcp_core import apps, proc
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
-from cavi_mcp_core.files import load_json
+from cavi_mcp_core.files import inside, load_json
 from cavi_mcp_core.journal import archive, completion, fingerprint, write_json
 from cavi_mcp_core.lock import FileLock
 from cavi_mcp_core.media import digest
@@ -83,13 +82,11 @@ class AnimateAuthoring:
         self._volume_name = None
 
     def _path(self, value, *, suffix=None, exists=False):
-        if (not isinstance(value, str) or not value or any(ord(c) < 32 for c in value)
-                or ".." in Path(value).parts):
-            raise AnimateRejected("Use a workspace path without traversal or control characters")
-        logical = self.workspace / value
-        path = logical.resolve()
-        if not path.is_relative_to(self.workspace) or path == self.workspace or logical != path:
-            raise AnimateRejected("Paths must stay inside the shared workspace without symlinks")
+        try:
+            path = inside(self.workspace, value, strict=True)
+        except ValueError as exc:
+            raise AnimateRejected("Use a path inside the shared workspace without traversal, "
+                                  "symlinks or control characters") from exc
         if suffix and path.suffix.lower() not in suffix:
             raise AnimateRejected("Unsupported file extension")
         if exists:
@@ -155,9 +152,8 @@ class AnimateAuthoring:
                    "launcher": launcher, "application": str(self._app().path),
                    "pid": process["pid"], "started": process["started"], "wait_seconds": 3.0}
         try:
-            result = subprocess.run([str(self._native_helper())], input=json.dumps(request),
-                                    capture_output=True, text=True, timeout=5, check=False)
-        except subprocess.TimeoutExpired as exc:
+            result = proc.run_sync([self._native_helper()], 5, input=json.dumps(request))
+        except TimeoutError as exc:
             raise AnimateUnknown("Animate JSFL chooser handler timed out; inspect the app before continuing") from exc
         if result.returncode:
             raise AnimateUnknown("Animate JSFL chooser handler failed: " + result.stderr.strip()[-1000:])
@@ -238,7 +234,7 @@ class AnimateAuthoring:
                     # A timed-out observer does not invalidate an exact native receipt;
                     # validate it below without dispatching the operation again. Explicit
                     # helper refusals (including authentication prompts) remain failures.
-                    if (not isinstance(exc.__cause__, subprocess.TimeoutExpired)
+                    if (not isinstance(exc.__cause__, TimeoutError)
                             or not response_path.exists()):
                         raise
             while True:

@@ -4,7 +4,6 @@ import json
 import os
 import plistlib
 import re
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -399,8 +398,8 @@ class AnimateTransportTests(unittest.TestCase):
                             "ok": True, "result": {"documents": []}}))
                     if helper_failure == "timeout":
                         try:
-                            raise subprocess.TimeoutExpired(["native-helper"], 5)
-                        except subprocess.TimeoutExpired as exc:
+                            raise TimeoutError("native-helper exceeded 5 s and was killed")
+                        except TimeoutError as exc:
                             raise AnimateUnknown("chooser handler timed out") from exc
                     raise AnimateUnknown("authentication prompt was refused")
 

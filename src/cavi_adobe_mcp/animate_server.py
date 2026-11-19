@@ -4,6 +4,7 @@ import threading
 from typing import Literal
 
 import anyio.to_thread
+from cavi_mcp_core.contracts import Result
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
 from cavi_mcp_core.server import Server
@@ -11,7 +12,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from . import animate_authoring
 from .config import workspace
-from .contracts import Result
 from .timeline_models import TimelineBatch
 
 mcp = Server("cavi-animate-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(

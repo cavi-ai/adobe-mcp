@@ -3,6 +3,7 @@
 from typing import Any, Literal
 
 import anyio.to_thread
+from cavi_mcp_core.contracts import Result
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
 from cavi_mcp_core.server import Server
@@ -11,7 +12,6 @@ from mcp.types import ToolAnnotations
 
 from . import dimension_authoring
 from .config import workspace
-from .contracts import Result
 
 mcp = Server("cavi-adobe-dimension", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Inspect an already-running Adobe Dimension instance or submit one workspace-owned scene render. "
