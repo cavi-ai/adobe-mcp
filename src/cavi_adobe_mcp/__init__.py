@@ -1,1 +1,1 @@
-"""MCP servers for Adobe Photoshop, Illustrator, Animate, Character Animator and Dimension."""
+"""MCP servers for Adobe Photoshop, Illustrator, Animate and Dimension."""

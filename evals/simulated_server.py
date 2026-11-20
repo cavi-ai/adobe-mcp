@@ -15,12 +15,9 @@ from cavi_adobe_mcp import (
     animate_authoring,
     animate_server,
     authoring_server,
-    character_animator_server,
-    character_bridge,
     dimension_authoring,
     dimension_server,
 )
-from cavi_adobe_mcp.character_animator import CharacterAnimator
 
 
 class SimulatedAdobe(adobe_authoring.AdobeAuthoring):
@@ -56,20 +53,6 @@ class SimulatedAnimate(animate_authoring.AnimateAuthoring):
                 "result": {"documents": []}}
 
 
-class SimulatedCharacterBridge:
-    def __init__(self, directory=None):
-        pass
-
-    def call(self, operation, parameters=None, expected=None, cancelled=None):
-        if operation not in {"status", "inspect"}:
-            raise character_bridge.CharacterRejected("Unsupported simulated native operation")
-        return {"version": 1, "ok": True, "operation": operation,
-                "state": {"bundle_id": character_bridge.BUNDLE_ID,
-                          "pid": 125, "launch_time": 1.0, "project_roots": [],
-                          "fingerprint": "simulated", "windows": [],
-                          "accessibility_trusted": True}}
-
-
 class SimulatedDimensionBridge:
     def call(self, operation):
         if operation not in {"status", "inspect"}:
@@ -83,7 +66,7 @@ class SimulatedDimensionBridge:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("server", choices=("authoring", "animate", "character_animator", "dimension"))
+    parser.add_argument("server", choices=("authoring", "animate", "dimension"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="adobe-eval-simulated-") as directory:
         root = Path(directory)
@@ -94,12 +77,6 @@ def main():
             host = SimulatedAnimate(root)
             with patch.object(animate_server, "host", return_value=host):
                 animate_server.main()
-        elif args.server == "character_animator":
-            host = CharacterAnimator(root, root / "data", bridge=SimulatedCharacterBridge())
-            with (patch.object(character_animator_server, "client", return_value=host),
-                  patch.object(character_animator_server, "NativeBridge", SimulatedCharacterBridge),
-                  patch.object(character_animator_server, "data_dir", return_value=root / "data")):
-                character_animator_server.main()
         else:
             host = dimension_authoring.DimensionAuthoring(root)
             host.bridge = SimulatedDimensionBridge()

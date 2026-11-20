@@ -41,7 +41,6 @@ class NativeRecoveryTests(unittest.TestCase):
                 env={
                     **os.environ,
                     "PYTHONPATH": str(ROOT / "tests"),
-                    "CAVI_ADOBE_DATA": str(root / "data"),
                     "CAVI_ADOBE_WORKSPACE": str(root),
                 },
             )

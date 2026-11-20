@@ -7,17 +7,7 @@ from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from cavi_adobe_mcp import character_animator_server
-
 ROOT = Path(__file__).resolve().parents[1]
-
-
-class EvaluationDescriptionTests(unittest.IsolatedAsyncioTestCase):
-    async def test_prepared_copy_description_names_the_open_tool(self):
-        tools = {tool.name: tool for tool in await character_animator_server.mcp.list_tools()}
-        description = tools["project_prepare_copy"].description
-        self.assertIn("project_open_prepared_copy", description)
-        self.assertNotIn("session_control to open", description)
 
 
 class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
@@ -25,7 +15,6 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
         cases = (
             ("authoring", "adobe_status", {"application": "photoshop"}),
             ("animate", "animate_status", {}),
-            ("character_animator", "character_status", {}),
             ("dimension", "dimension_status", {}),
         )
         for server, tool, arguments in cases:
@@ -52,8 +41,6 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
              "adobe_status", {"application": "photoshop"}),
             ("animate", "animate_open_copy", {"source": "../input.fla", "destination": "copy.fla"},
              "animate_status", {}),
-            ("character_animator", "project_prepare_copy",
-             {"source": "../input.chproj", "destination": "copy"}, "character_status", {}),
             ("dimension", "dimension_render_start", {"scene": "../input.dn", "directory": "render"},
              "dimension_status", {}),
         )

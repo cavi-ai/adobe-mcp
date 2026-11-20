@@ -299,8 +299,7 @@ class DimensionProtocolTests(unittest.IsolatedAsyncioTestCase):
             data.mkdir()
             parameters = StdioServerParameters(command=sys.executable,
                 args=["-m", "cavi_adobe_mcp.dimension_server"],
-                env={**os.environ, "CAVI_ADOBE_DATA": str(data),
-                     "CAVI_ADOBE_WORKSPACE": str(workspace)})
+                env={**os.environ, "CAVI_ADOBE_WORKSPACE": str(workspace)})
             async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as client:
                 initialized = await client.initialize()
                 self.assertEqual(initialized.server_info.name, "cavi-adobe-dimension")
