@@ -1,5 +1,6 @@
 """Discovery contracts used by the disconnected evaluation fixtures."""
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -62,3 +63,63 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
                     status = await client.call_tool(status_tool, status_arguments)
                     self.assertFalse(status.is_error)
                     self.assertFalse(status.structured_content["launches_application"])
+
+
+GENERATIVE_TOOLS = ("adobe_generative_fill", "adobe_remove_background", "adobe_generative_upscale")
+
+
+class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
+    def manifest_probes(self):
+        manifest = json.loads((ROOT / "evals/authoring.inspection.manifest.json").read_text())
+        return {probe["tool"]: probe for probe in manifest["probes"]
+                if probe.get("tool") in GENERATIVE_TOOLS}
+
+    async def test_catalog_lists_generative_tools_within_the_discovery_budget(self):
+        budget = json.loads((ROOT / "evals/authoring.manifest.json").read_text())["probes"][0]
+        parameters = StdioServerParameters(command=sys.executable, args=[
+            str(ROOT / "evals/simulated_server.py"), "authoring"])
+        async with stdio_client(parameters) as (reader, writer), \
+                ClientSession(reader, writer) as client:
+            await client.initialize()
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        self.assertLessEqual(len(tools), budget["max_tools"])
+        for name in GENERATIVE_TOOLS:
+            with self.subTest(tool=name):
+                self.assertIn(name, tools)
+                self.assertFalse(tools[name].annotations.read_only_hint)
+                self.assertEqual(tools[name].input_schema["properties"]["application"]["const"],
+                                 "photoshop")
+        for name in ("adobe_generative_fill", "adobe_generative_upscale"):
+            with self.subTest(tool=name):
+                self.assertTrue(tools[name].annotations.open_world_hint)
+                self.assertTrue(tools[name].annotations.destructive_hint)
+
+    async def test_manifest_probes_each_generative_tool_with_a_rejected_input(self):
+        probes = self.manifest_probes()
+        self.assertEqual(sorted(probes), sorted(GENERATIVE_TOOLS))
+        parameters = StdioServerParameters(command=sys.executable, args=[
+            str(ROOT / "evals/simulated_server.py"), "authoring"])
+        async with stdio_client(parameters) as (reader, writer), \
+                ClientSession(reader, writer) as client:
+            await client.initialize()
+            for name, probe in probes.items():
+                with self.subTest(tool=name):
+                    self.assertEqual(probe["expect"], {"outcome": "error"})
+                    rejected = await client.call_tool(name, probe["arguments"])
+                    self.assertTrue(rejected.is_error)
+                    self.assertEqual(rejected.structured_content["error"]["code"],
+                                     "INVALID_ARGUMENT")
+                    self.assertEqual(rejected.structured_content["error"]["outcome"], "rejected")
+            status = await client.call_tool("adobe_status", {"application": "photoshop"})
+            self.assertFalse(status.is_error)
+
+    async def test_overlong_generative_fill_prompt_is_rejected(self):
+        parameters = StdioServerParameters(command=sys.executable, args=[
+            str(ROOT / "evals/simulated_server.py"), "authoring"])
+        async with stdio_client(parameters) as (reader, writer), \
+                ClientSession(reader, writer) as client:
+            await client.initialize()
+            rejected = await client.call_tool("adobe_generative_fill", {
+                "application": "photoshop", "session_id": "unused", "prompt": "x" * 1001})
+            self.assertTrue(rejected.is_error)
+            self.assertEqual(rejected.structured_content["error"]["code"], "INVALID_ARGUMENT")
