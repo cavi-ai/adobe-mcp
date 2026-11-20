@@ -20,11 +20,11 @@ from cavi_mcp_core.lock import FileLock
 from cavi_mcp_core.media import digest
 from PIL import Image
 
-from . import native
+from ..core import native_helper as native
 
 BUNDLE_ID = "com.adobe.dimension"
 APP_PATH = Path("/Applications/Adobe Dimension/Adobe Dimension.app")
-SOURCE = Path(__file__).with_name("dimension_native.swift")
+SOURCE = Path(__file__).with_name("native.swift")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 PNG_MAX_BYTES = 512 * 1024 * 1024
 PNG_MAX_PIXELS = 120_000_000

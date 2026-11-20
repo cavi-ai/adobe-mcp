@@ -3,8 +3,8 @@
 import sys
 
 if sys.argv[1] == "adobe":
-    from cavi_adobe_mcp import adobe_authoring as adapter
-    from cavi_adobe_mcp.authoring_server import mcp
+    from cavi_adobe_mcp.authoring import bridge as adapter
+    from cavi_adobe_mcp.authoring.server import mcp
 
     original = adapter.AdobeAuthoring._native
 
@@ -18,8 +18,8 @@ if sys.argv[1] == "adobe":
 
     adapter.AdobeAuthoring._native = native
 else:
-    from cavi_adobe_mcp import animate_authoring as adapter
-    from cavi_adobe_mcp.animate_server import mcp
+    from cavi_adobe_mcp.animate import bridge as adapter
+    from cavi_adobe_mcp.animate.server import mcp
 
     original = adapter.AnimateAuthoring._native
 

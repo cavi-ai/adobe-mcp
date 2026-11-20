@@ -37,7 +37,7 @@ APPS = {
     "illustrator": ("com.adobe.illustrator", "Adobe Illustrator*/*.app", ".ai",
                     "CAVI_ILLUSTRATOR_APP", "Adobe Illustrator"),
 }
-DRIVER = Path(__file__).with_name("adobe_authoring.jsx")
+DRIVER = Path(__file__).with_name("driver.jsx")
 SESSION = re.compile(r"^[0-9a-f]{32}$")
 SNAPSHOT_FIELDS = ("name", "path", "native_id", "identity", "saved", "width", "height",
                    "units", "color_profile", "color_space", "bit_depth", "layers", "paths")

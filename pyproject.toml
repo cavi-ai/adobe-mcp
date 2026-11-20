@@ -45,9 +45,9 @@ Issues = "https://github.com/cavi-ai/adobe-mcp/issues"
 Changelog = "https://github.com/cavi-ai/adobe-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
-cavi-adobe-authoring-mcp = "cavi_adobe_mcp.authoring_server:main"
-cavi-animate-mcp = "cavi_adobe_mcp.animate_server:main"
-cavi-dimension-mcp = "cavi_adobe_mcp.dimension_server:main"
+cavi-adobe-authoring-mcp = "cavi_adobe_mcp.authoring.server:main"
+cavi-animate-mcp = "cavi_adobe_mcp.animate.server:main"
+cavi-dimension-mcp = "cavi_adobe_mcp.dimension.server:main"
 
 [dependency-groups]
 dev = ["numpy>=2.0,<3", "pypng>=0.20220715.0,<1", "ruff>=0.14,<1"]
@@ -60,7 +60,7 @@ source = "vcs"
 packages = ["src/cavi_adobe_mcp"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/evals", "/package.json", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproject.toml"]
+include = ["/src", "/tests", "/evals", "/docs", "/scripts", "/package.json", "/README.md", "/LICENSE", "/CHANGELOG.md", "/pyproject.toml"]
 
 [tool.ruff]
 line-length = 100

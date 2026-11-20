@@ -6,7 +6,7 @@ from fractions import Fraction
 from cavi_mcp_core import apps, proc
 from cavi_mcp_core.media import MediaOutcomeUnknown, run
 
-from . import art_media as media
+from . import frames as media
 
 
 def review_movie(workspace, receipt, directory, codec="prores_alpha"):

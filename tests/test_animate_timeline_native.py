@@ -30,7 +30,7 @@ class TimelineNativeTests(unittest.TestCase):
             ImageDraw.Draw(image).ellipse((10,10,50,50),fill=(30,180,210,255))
             image.save(root/'orb.png')
             params=StdioServerParameters(command=sys.executable,
-                args=['-m','cavi_adobe_mcp.animate_server'],
+                args=['-m','cavi_adobe_mcp.animate.server'],
                 env={**os.environ,'CAVI_ADOBE_WORKSPACE':str(root)})
             async with stdio_client(params) as (r,w), ClientSession(r,w,read_timeout_seconds=180) as client:
                 await client.initialize()

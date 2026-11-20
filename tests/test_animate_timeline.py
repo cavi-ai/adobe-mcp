@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from cavi_adobe_mcp.animate_authoring import AnimateAuthoring, validate_timeline_edits
+from cavi_adobe_mcp.animate.bridge import AnimateAuthoring, validate_timeline_edits
 
 
 class TimelineTests(unittest.TestCase):

@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cavi_adobe_mcp import native
+from cavi_adobe_mcp.core import native_helper as native
 
-PACKAGE = Path(native.__file__).parent
+PACKAGE = Path(native.__file__).parent.parent
 # Stands in for swiftc: copies the source to -o and counts its runs.
 FAKE_SWIFTC = """#!/bin/sh
 echo run >> "$(dirname "$0")/runs"
@@ -130,9 +130,11 @@ class BuildHelperTests(unittest.TestCase):
                      "needs macOS and swiftc")
 class ShippedHelperTests(unittest.TestCase):
     def test_every_shipped_helper_compiles(self):
-        for source in sorted(PACKAGE.glob("*_native.swift")):
-            with self.subTest(source=source.name), tempfile.TemporaryDirectory() as state:
-                helper = native.build_helper(source, Path(state), source.stem)
+        sources = sorted(PACKAGE.glob("*/native.swift"))
+        self.assertEqual([source.parent.name for source in sources], ["animate", "dimension"])
+        for source in sources:
+            with self.subTest(source=source.parent.name), tempfile.TemporaryDirectory() as state:
+                helper = native.build_helper(source, Path(state), source.parent.name + "-native")
                 self.assertTrue(os.access(helper, os.X_OK))
                 # Each helper answers an empty request with a JSON refusal, never a crash.
                 result = subprocess.run([str(helper)], input="{}", capture_output=True,

@@ -16,7 +16,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from cavi_adobe_mcp.animate_authoring import (
+from cavi_adobe_mcp.animate.bridge import (
     APP_ID,
     AnimateAuthoring,
     AnimateRejected,
@@ -252,7 +252,7 @@ class AnimateProtocolTests(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             data.mkdir()
             parameters = StdioServerParameters(command=sys.executable,
-                args=["-m", "cavi_adobe_mcp.animate_server"],
+                args=["-m", "cavi_adobe_mcp.animate.server"],
                 env={**os.environ, "CAVI_ADOBE_WORKSPACE": str(workspace)})
             async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as client:
                 initialized = await client.initialize()
@@ -311,7 +311,7 @@ class AnimateTransportTests(unittest.TestCase):
             literals = re.findall(r'"(?:\\.|[^"\\])*"', launcher)
             driver_uri, entry, request_uri, response_uri, cancel_uri = map(json.loads, literals)
             self.assertEqual(entry, "caviDispatch")
-            self.assertEqual(driver_uri, Path(__import__("cavi_adobe_mcp.animate_authoring", fromlist=["DRIVER"]).DRIVER).as_uri())
+            self.assertEqual(driver_uri, Path(__import__("cavi_adobe_mcp.animate.bridge",fromlist=["DRIVER"]).DRIVER).as_uri())
             request_path = self.local(request_uri)
             observed["request"] = json.loads(request_path.read_text())
             self.assertEqual(observed["request"]["volume_name"], "Macintosh HD")
@@ -326,8 +326,8 @@ class AnimateTransportTests(unittest.TestCase):
         self.authoring.dispatcher = None
         self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
-        with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                patch("cavi_adobe_mcp.animate_authoring.proc.run_sync", side_effect=launch), \
+        with patch("cavi_adobe_mcp.animate.bridge.sys.platform", "darwin"), \
+                patch("cavi_adobe_mcp.animate.bridge.proc.run_sync", side_effect=launch), \
                 patch.object(self.authoring, "status", return_value=state), \
                 patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"):
             response = self.authoring._native(request)
@@ -364,8 +364,8 @@ class AnimateTransportTests(unittest.TestCase):
         self.authoring.dispatcher = None
         self.authoring.app_path = self.fake_app()
         self.authoring.store.mkdir(mode=0o700)
-        with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                patch("cavi_adobe_mcp.animate_authoring.proc.run_sync", side_effect=launch), \
+        with patch("cavi_adobe_mcp.animate.bridge.sys.platform", "darwin"), \
+                patch("cavi_adobe_mcp.animate.bridge.proc.run_sync", side_effect=launch), \
                 patch.object(self.authoring, "status", return_value=state), \
                 patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"), \
                 patch.object(self.authoring, "_handle_jsfl_prompt", side_effect=handle):
@@ -402,8 +402,8 @@ class AnimateTransportTests(unittest.TestCase):
                             raise AnimateUnknown("chooser handler timed out") from exc
                     raise AnimateUnknown("authentication prompt was refused")
 
-                with patch("cavi_adobe_mcp.animate_authoring.sys.platform", "darwin"), \
-                        patch("cavi_adobe_mcp.animate_authoring.proc.run_sync",
+                with patch("cavi_adobe_mcp.animate.bridge.sys.platform", "darwin"), \
+                        patch("cavi_adobe_mcp.animate.bridge.proc.run_sync",
                               return_value=proc.Result(0, "", "")), \
                         patch.object(self.authoring, "status", return_value=state), \
                         patch.object(self.authoring, "_root_volume_name", return_value="Macintosh HD"), \

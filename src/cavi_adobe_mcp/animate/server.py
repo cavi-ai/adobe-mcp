@@ -10,9 +10,9 @@ from cavi_mcp_core.server import WRITES as WRITE
 from cavi_mcp_core.server import Server
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import animate_authoring
-from .config import workspace
-from .timeline_models import TimelineBatch
+from ..core.config import workspace
+from . import bridge
+from .timeline import TimelineBatch
 
 mcp = Server("cavi-animate-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Inspect and author only workspace-owned Adobe Animate FLA copies. Animate must already be open. "
@@ -47,7 +47,7 @@ async def invoke(function, *args, cancellable=False):
         return await anyio.to_thread.run_sync(
             lambda: function(*args, **({"cancelled": cancelled} if cancellable else {})),
             abandon_on_cancel=True)
-    except (OSError, ValueError, TypeError, KeyError, animate_authoring.AnimateUnknown) as exc:
+    except (OSError, ValueError, TypeError, KeyError, bridge.AnimateUnknown) as exc:
         raise ToolError(str(exc)) from exc
     except BaseException:
         cancelled.set()
@@ -55,7 +55,7 @@ async def invoke(function, *args, cancellable=False):
 
 
 def host():
-    return animate_authoring.AnimateAuthoring(workspace())
+    return bridge.AnimateAuthoring(workspace())
 
 
 @mcp.tool(annotations=READ)

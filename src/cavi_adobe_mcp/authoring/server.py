@@ -10,8 +10,9 @@ from cavi_mcp_core.server import Server
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
-from . import adobe_authoring, native_media
-from .config import workspace
+from ..core.config import workspace
+from ..media import review_movie
+from . import bridge
 
 mcp = Server("cavi-adobe-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Explicit local Photoshop/Illustrator edits on new owned PSD/AI copies "
@@ -76,13 +77,13 @@ class MovieExport(Result):
 def invoke(function, *args, **kwargs):
     try:
         return function(*args, **kwargs)
-    except (OSError, ValueError, adobe_authoring.AdobeOutcomeUnknown,
-            native_media.MediaOutcomeUnknown) as exc:
+    except (OSError, ValueError, bridge.AdobeOutcomeUnknown,
+            review_movie.MediaOutcomeUnknown) as exc:
         raise ToolError(str(exc)) from exc
 
 
 def app(kind, timeout=45):
-    return adobe_authoring.AdobeAuthoring(workspace(), kind, timeout=timeout)
+    return bridge.AdobeAuthoring(workspace(), kind, timeout=timeout)
 
 
 @mcp.tool(annotations=READ)
@@ -271,7 +272,7 @@ def adobe_generative_upscale(application: Literal["photoshop"], session_id: str)
 def media_review_movie(receipt: str, directory: str,
                        codec: Literal["prores_alpha", "h264_black"] = "prores_alpha") -> MovieExport:
     """Run free local FFmpeg/ffprobe on pinned frames; MOV retains alpha, MP4 explicitly composites black."""
-    return invoke(native_media.review_movie, workspace(), receipt, directory, codec)
+    return invoke(review_movie.review_movie,workspace(), receipt, directory, codec)
 
 
 def main():
