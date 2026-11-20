@@ -17,7 +17,8 @@ mcp = Server("cavi-adobe-authoring", package="cavi-adobe-mcp", anticipated=(), i
     "Explicit local Photoshop/Illustrator edits on new owned PSD/AI copies "
     "and FFmpeg review movies. Server startup never launches applications. Start with status; "
     "native Adobe document operations require an already running app and local Automation access. "
-    "Never sign in or retry an unknown outcome. Keep .adobe-authoring state private."
+    "Never sign in or retry an unknown outcome. Keep .adobe-authoring state private. "
+    "Photoshop generative tools use the signed-in Creative Cloud account and spend generative credits."
 ))
 App = Literal["photoshop", "illustrator"]
 Index = Annotated[StrictInt, Field(ge=0, le=10000)]
@@ -80,8 +81,8 @@ def invoke(function, *args, **kwargs):
         raise ToolError(str(exc)) from exc
 
 
-def app(kind):
-    return adobe_authoring.AdobeAuthoring(workspace(), kind)
+def app(kind, timeout=45):
+    return adobe_authoring.AdobeAuthoring(workspace(), kind, timeout=timeout)
 
 
 @mcp.tool(annotations=READ)
@@ -238,6 +239,32 @@ def adobe_apply_mask(application: App, session_id: str, layer_path: LayerPath,
                      expected_name: str, path_name: str) -> AdobeMutation:
     """Apply a retained named path as a PS layer mask or Illustrator clipping group."""
     return invoke(app(application).apply_mask, session_id, layer_path, expected_name, path_name)
+
+
+CLOUD = MUTATE.model_copy(update={"open_world_hint": True})
+
+
+@mcp.tool(annotations=CLOUD)
+def adobe_generative_fill(application: Literal["photoshop"], session_id: str,
+                          prompt: Annotated[str, Field(max_length=1000)],
+                          bounds: Annotated[list[float], Field(min_length=4, max_length=4)] | None = None) -> AdobeMutation:
+    """Generate a new layer from a prompt in x,y,width,height px, or the whole canvas. Sends pixels to Adobe and
+    spends generative credits; Photoshop's one-time Generative Credits notice must already be acknowledged."""
+    return invoke(app(application, 120).generative_fill, session_id, prompt, bounds)
+
+
+@mcp.tool(annotations=MUTATE)
+def adobe_remove_background(application: Literal["photoshop"], session_id: str, layer_path: LayerPath,
+                            expected_name: str) -> AdobeMutation:
+    """Add a layer mask that keeps the detected subject of one exact unmasked pixel layer."""
+    return invoke(app(application, 120).remove_background, session_id, layer_path, expected_name)
+
+
+@mcp.tool(annotations=CLOUD)
+def adobe_generative_upscale(application: Literal["photoshop"], session_id: str) -> AdobeMutation:
+    """Double an owned PSD of at most 1440 px per side and add the upscaled image as a new top layer.
+    Sends pixels to Adobe and may spend generative credits."""
+    return invoke(app(application, 120).generative_upscale, session_id)
 
 
 @mcp.tool(annotations=WRITE)

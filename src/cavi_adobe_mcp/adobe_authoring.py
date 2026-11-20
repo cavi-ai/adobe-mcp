@@ -840,6 +840,35 @@ class AdobeAuthoring:
         return self._owned_action(session_id, "apply_mask", {
             "layer_path": layer_path, "expected_name": expected_name, "path_name": path_name})
 
+    def _photoshop_only(self, feature):
+        if self.app != "photoshop":
+            raise ValueError(f"{feature} is supported only in Photoshop")
+
+    def generative_fill(self, session_id, prompt, bounds=None):
+        """Generate a new layer from a prompt inside bounds, or across the canvas without bounds."""
+        self._photoshop_only("Generative Fill")
+        if (not isinstance(prompt, str) or len(prompt) > 1000
+                or any(ord(c) < 32 for c in prompt)):
+            raise ValueError("prompt must contain 0..1000 printable characters")
+        if bounds is not None:
+            if not isinstance(bounds, list) or len(bounds) != 4:
+                raise ValueError("bounds must be x,y,width,height")
+            for index, value in enumerate(bounds):
+                _number(value, "bounds", 0 if index < 2 else 1, 30000)
+        return self._owned_action(session_id, "generative_fill", {"prompt": prompt, "bounds": bounds})
+
+    def remove_background(self, session_id, layer_path, expected_name):
+        """Mask everything except the detected subject on one exact pixel layer."""
+        self._photoshop_only("Remove Background")
+        validate_edits([{"path": layer_path, "expected_name": expected_name, "visible": True}])
+        return self._owned_action(session_id, "remove_background", {
+            "layer_path": layer_path, "expected_name": expected_name})
+
+    def generative_upscale(self, session_id):
+        """Double the pixel dimensions and add the upscaled image as a new top layer."""
+        self._photoshop_only("Generative Upscale")
+        return self._owned_action(session_id, "generative_upscale", {})
+
     def close_copy(self, session_id: str):
         """Close only this session's retained native document reference, without saving."""
         return self._owned_action(session_id, "close_copy", {})

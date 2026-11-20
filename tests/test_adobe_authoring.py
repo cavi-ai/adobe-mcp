@@ -107,6 +107,51 @@ class AdobeAuthoringTests(unittest.TestCase):
             bridge.resize_image('0' * 32, 768, 768)
         self.assertEqual(bridge.requests, [])
 
+    def test_generative_fill_validates_before_dispatch_and_returns_document_snapshot(self):
+        session = self.session()
+        result = self.bridge.generative_fill(session, 'a red apple', [0, 0, 1, 1])
+        request = self.bridge.requests[-1]
+        self.assertEqual((request['action'], request['prompt'], request['bounds']),
+                         ('generative_fill', 'a red apple', [0, 0, 1, 1]))
+        self.assertIn('layers', result['document'])
+        self.assertFalse(result['retry_safe'])
+        self.bridge.generative_fill(session, '')
+        self.assertIsNone(self.bridge.requests[-1]['bounds'])
+        count = len(self.bridge.requests)
+        for prompt, bounds in ((None, None), ('x' * 1001, None), ('a\nb', None),
+                               ('ok', [0, 0, 0, 1]), ('ok', [0, 0, 1]), ('ok', [-1, 0, 1, 1])):
+            with self.subTest(prompt=prompt, bounds=bounds), self.assertRaises(ValueError):
+                self.bridge.generative_fill(session, prompt, bounds)
+        self.assertEqual(len(self.bridge.requests), count)
+
+    def test_remove_background_targets_one_exact_layer(self):
+        session = self.session()
+        result = self.bridge.remove_background(session, [0], 'Subject')
+        request = self.bridge.requests[-1]
+        self.assertEqual((request['action'], request['layer_path'], request['expected_name']),
+                         ('remove_background', [0], 'Subject'))
+        self.assertIn('layers', result['document'])
+        count = len(self.bridge.requests)
+        for path, name in (([], 'Subject'), ([0], ''), ([True], 'Subject'), (None, 'Subject')):
+            with self.subTest(path=path, name=name), self.assertRaises(ValueError):
+                self.bridge.remove_background(session, path, name)
+        self.assertEqual(len(self.bridge.requests), count)
+
+    def test_generative_upscale_dispatches_once_for_an_owned_copy(self):
+        session = self.session()
+        result = self.bridge.generative_upscale(session)
+        self.assertEqual(self.bridge.requests[-1]['action'], 'generative_upscale')
+        self.assertIn('layers', result['document'])
+
+    def test_generative_tools_reject_illustrator_before_native_dispatch(self):
+        bridge = ContractBridge(self.root, app='illustrator')
+        for call in (lambda: bridge.generative_fill('0' * 32, 'a red apple'),
+                     lambda: bridge.remove_background('0' * 32, [0], 'Subject'),
+                     lambda: bridge.generative_upscale('0' * 32)):
+            with self.assertRaisesRegex(ValueError, 'only in Photoshop'):
+                call()
+        self.assertEqual(bridge.requests, [])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -601,6 +646,21 @@ class AdobeCanvasProtocolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(resize.input_schema['properties']['application']['const'], 'photoshop')
                 self.assertFalse(resize.annotations.read_only_hint)
                 self.assertTrue(resize.annotations.destructive_hint)
+                for name, required in (('adobe_generative_fill', {'application', 'session_id', 'prompt'}),
+                                       ('adobe_remove_background', {'application', 'session_id', 'layer_path', 'expected_name'}),
+                                       ('adobe_generative_upscale', {'application', 'session_id'})):
+                    with self.subTest(tool=name):
+                        tool = tools[name]
+                        self.assertEqual(set(tool.input_schema['required']), required)
+                        self.assertEqual(tool.input_schema['properties']['application']['const'], 'photoshop')
+                        self.assertTrue(tool.annotations.destructive_hint)
+                self.assertTrue(tools['adobe_generative_fill'].annotations.open_world_hint)
+                self.assertTrue(tools['adobe_generative_upscale'].annotations.open_world_hint)
+                self.assertFalse(tools['adobe_remove_background'].annotations.open_world_hint)
+                rejected_fill = await client.call_tool('adobe_generative_fill', {
+                    'application': 'photoshop', 'session_id': '0' * 32, 'prompt': 'x' * 1001})
+                self.assertTrue(rejected_fill.is_error)
+                self.assertEqual(rejected_fill.structured_content['error']['outcome'], 'rejected')
                 rejected = await client.call_tool('adobe_create_canvas', {
                     'width': True, 'height': 256, 'destination': 'output/canvas.psd'})
                 self.assertTrue(rejected.is_error)
