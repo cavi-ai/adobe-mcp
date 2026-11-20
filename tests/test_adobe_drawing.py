@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from cavi_adobe_mcp.adobe_authoring import AdobeAuthoring
+from cavi_adobe_mcp.authoring.bridge import AdobeAuthoring
 
 
 class DrawingTests(unittest.TestCase):

@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 from cavi_mcp_core.contracts import OperationRejected
 
-from cavi_adobe_mcp import adobe_authoring, animate_authoring
-from cavi_adobe_mcp.adobe_authoring import AdobeAuthoring
-from cavi_adobe_mcp.animate_authoring import AnimateAuthoring, AnimateRejected
+from cavi_adobe_mcp import animate, authoring
+from cavi_adobe_mcp.animate.bridge import AnimateAuthoring, AnimateRejected
+from cavi_adobe_mcp.authoring.bridge import AdobeAuthoring
 
 OVERRIDES = ("CAVI_PHOTOSHOP_APP", "CAVI_ILLUSTRATOR_APP", "CAVI_ANIMATE_APP")
 
@@ -38,14 +38,14 @@ class AppLookupTests(unittest.TestCase):
         return app
 
     def authoring_status(self, application):
-        with patch.object(adobe_authoring.sys, "platform", "darwin"):
+        with patch.object(authoring.bridge.sys, "platform", "darwin"):
             return AdobeAuthoring(self.root / "workspace", application).status()
 
     def test_photoshop_and_illustrator_use_their_overrides(self):
         for application, env in (("photoshop", "CAVI_PHOTOSHOP_APP"),
                                  ("illustrator", "CAVI_ILLUSTRATOR_APP")):
             with self.subTest(application=application):
-                identifier = adobe_authoring.APPS[application][0]
+                identifier = authoring.bridge.APPS[application][0]
                 app = self.app(f"Chosen {application}", identifier, "27.0")
                 os.environ[env] = str(app)
                 state = self.authoring_status(application)
@@ -60,7 +60,7 @@ class AppLookupTests(unittest.TestCase):
         self.assertIn("CAVI_PHOTOSHOP_APP", str(caught.exception))
 
     def test_animate_uses_its_override(self):
-        app = self.app("Animate", animate_authoring.APP_ID, "24.0.15")
+        app = self.app("Animate", animate.bridge.APP_ID, "24.0.15")
         os.environ["CAVI_ANIMATE_APP"] = str(app)
         state = AnimateAuthoring(self.root / "workspace").status()
         self.assertEqual((state["application"], state["version"], state["running"]),

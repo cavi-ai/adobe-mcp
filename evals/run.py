@@ -75,7 +75,7 @@ def main():
                 if mode == "native-background" and server in {"authoring", "animate"}:
                     suffix = ".background"
                 command = ([str(ROOT / "evals/simulated_server.py"), server] if mode == "simulated"
-                           else ["-m", f"cavi_adobe_mcp.{server}_server"])
+                           else ["-m", f"cavi_adobe_mcp.{server}.server"])
                 key = f"{server}-{mode}"
                 with (output / f"{key}.json").open("w") as stream:
                     result = subprocess.run([

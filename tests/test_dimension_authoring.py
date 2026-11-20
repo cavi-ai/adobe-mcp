@@ -15,8 +15,8 @@ from mcp.client.stdio import stdio_client
 from mcp.server.mcpserver.exceptions import ToolError
 from PIL import Image
 
-from cavi_adobe_mcp import dimension_server
-from cavi_adobe_mcp.dimension_authoring import (
+from cavi_adobe_mcp.dimension import server
+from cavi_adobe_mcp.dimension.bridge import (
     DimensionAuthoring,
     DimensionBridge,
     DimensionRejected,
@@ -75,7 +75,7 @@ class DimensionBridgeTests(unittest.TestCase):
             packet = {"version": 1, "operation": "inspect", "ok": True,
                       "result": {"running": True, "windows": []}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                    patch("cavi_adobe_mcp.dimension.bridge.proc.run_sync", return_value=proc.Result(
                         0, json.dumps(packet), "")) as run:
                 self.assertEqual(bridge.call("inspect"), packet["result"])
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"operation": "inspect"})
@@ -91,13 +91,13 @@ class DimensionBridgeTests(unittest.TestCase):
                           "bundle_path": "/Applications/Adobe Dimension/Adobe Dimension.app",
                           "launches_application": False}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                    patch("cavi_adobe_mcp.dimension.bridge.proc.run_sync", return_value=proc.Result(
                         0, json.dumps(packet), "")) as run:
                 self.assertEqual(bridge.call("launch"), packet["result"])
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"version": 1, "operation": "launch"})
             packet["result"]["bundle_path"] = "/Applications/Other.app"
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                    patch("cavi_adobe_mcp.dimension.bridge.proc.run_sync", return_value=proc.Result(
                         0, json.dumps(packet), "")), \
                     self.assertRaises(DimensionUnknown):
                 bridge.call("launch")
@@ -113,7 +113,7 @@ class DimensionBridgeTests(unittest.TestCase):
             request = {"workspace": directory, "source": directory + "/render.dn",
                        "directory": directory, "basename": "render"}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                    patch("cavi_adobe_mcp.dimension.bridge.proc.run_sync", return_value=proc.Result(
                         0, json.dumps(packet), "")) as run, \
                     self.assertRaises(DimensionRejected):
                 bridge.render_start(request, IDENTITY)
@@ -131,7 +131,7 @@ class DimensionBridgeTests(unittest.TestCase):
                                 "outcome": "unknown", "retry_safe": False,
                                 "phase": "wait_for_document_view", "render_dispatched": True}}
             with patch.object(bridge, "_executable", return_value=binary), \
-                    patch("cavi_adobe_mcp.dimension_authoring.proc.run_sync", return_value=proc.Result(
+                    patch("cavi_adobe_mcp.dimension.bridge.proc.run_sync", return_value=proc.Result(
                         0, json.dumps(packet), "")), \
                     self.assertRaises(DimensionUnknown) as caught:
                 bridge.render_start({"workspace": directory}, IDENTITY)
@@ -280,14 +280,14 @@ class DimensionProtocolTests(unittest.IsolatedAsyncioTestCase):
             bridge = FakeBridge()
             bridge.fail = DimensionUnknown("native helper outcome is unknown", "NATIVE_TIMEOUT")
             authoring.bridge = bridge
-            with patch.object(dimension_server, "host", return_value=authoring):
+            with patch.object(server, "host", return_value=authoring):
                 with self.assertRaises(ToolError) as first:
-                    await dimension_server.dimension_render_start("radio.dn", "renders/job")
+                    await server.dimension_render_start("radio.dn", "renders/job")
                 operation = re.search(r"operation_id=([0-9a-f]{32})", str(first.exception))
                 self.assertIsNotNone(operation)
                 self.assertIn("dimension_render_inspect", str(first.exception))
                 with self.assertRaises(ToolError) as second:
-                    await dimension_server.dimension_render_start("radio.dn", "renders/second")
+                    await server.dimension_render_start("radio.dn", "renders/second")
             self.assertIn(operation.group(1), str(second.exception))
             self.assertEqual(bridge.calls, 1)
 
@@ -298,7 +298,7 @@ class DimensionProtocolTests(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             data.mkdir()
             parameters = StdioServerParameters(command=sys.executable,
-                args=["-m", "cavi_adobe_mcp.dimension_server"],
+                args=["-m", "cavi_adobe_mcp.dimension.server"],
                 env={**os.environ, "CAVI_ADOBE_WORKSPACE": str(workspace)})
             async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as client:
                 initialized = await client.initialize()

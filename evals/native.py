@@ -16,7 +16,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from cavi_adobe_mcp import art_media as media
+from cavi_adobe_mcp.media import frames as media
 from evals.run import BACKGROUND_TOOLS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,7 +54,7 @@ class NativeRun:
 
     def server(self, module):
         return StdioServerParameters(command=sys.executable,
-            args=["-m", f"cavi_adobe_mcp.{module}_server"], env=self.env)
+            args=["-m", f"cavi_adobe_mcp.{module}.server"], env=self.env)
 
     async def check_installed(self):
         for module, tools in (

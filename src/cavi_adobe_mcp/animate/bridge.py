@@ -26,14 +26,15 @@ from cavi_mcp_core.media import digest
 from cavi_mcp_core.workspace import remove_tree
 from PIL import Image
 
-from . import art_media, native
+from ..core import native_helper as native
+from ..media import frames as media_frames
 
 APP_ID = "com.adobe.Adobe-Animate-2024.application"
 APP_NAME = "Adobe Animate 2024"
 APP_GLOB = "Adobe Animate*/*.app"
 APP_ENV = "CAVI_ANIMATE_APP"
-DRIVER = Path(__file__).with_name("animate_authoring.jsfl")
-NATIVE_HELPER = Path(__file__).with_name("animate_native.swift")
+DRIVER = Path(__file__).with_name("driver.jsfl")
+NATIVE_HELPER = Path(__file__).with_name("native.swift")
 SESSION_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -64,7 +65,7 @@ def launcher_source(request_uri: str, response_uri: str, cancel_uri: str) -> str
 
 
 def validate_timeline_edits(edits):
-    from .timeline_models import TimelineBatch
+    from .timeline import TimelineBatch
     return TimelineBatch(edits=edits).model_dump(exclude_none=True)["edits"]
 
 
@@ -505,7 +506,7 @@ class AnimateAuthoring:
                                "path": str(path.relative_to(self.workspace)), "sha256": digest(path),
                                "width": width, "height": height, "rect": [0, 0, width, height]})
             receipt_path = target / "media.json"
-            payload = {"schema": art_media.SCHEMA, "version": 1,
+            payload = {"schema": media_frames.SCHEMA, "version": 1,
                        "name": Path(session["document"]).stem, "fps": {"numerator": fps.numerator,
                                                                           "denominator": fps.denominator},
                        "loop": False, "alpha": "straight", "coordinate_origin": "top_left",
@@ -513,7 +514,7 @@ class AnimateAuthoring:
                        "sources": [{"path": source_snapshot["path"], "sha256": source_snapshot["sha256"]},
                                    {"path": session["source"], "sha256": session["source_sha256"]}]}
             write_json(receipt_path, payload)
-            validated = art_media.validate(self.workspace, str(receipt_path.relative_to(self.workspace)))
+            validated = media_frames.validate(self.workspace, str(receipt_path.relative_to(self.workspace)))
             return {"session": session_id, "document": result["document"],
                     "source_snapshot": source_snapshot,
                     "media": validated,

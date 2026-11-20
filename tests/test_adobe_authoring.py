@@ -16,7 +16,7 @@ from cavi_mcp_core import proc
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from cavi_adobe_mcp.adobe_authoring import (
+from cavi_adobe_mcp.authoring.bridge import (
     AdobeAuthoring,
     AdobeCommandRejected,
     AdobeOutcomeUnknown,
@@ -400,7 +400,7 @@ class AdobeAuthoringTests(unittest.TestCase):
 
     def test_failed_export_postprocessing_blocks_blind_retries(self):
         session = self.session()
-        with (patch('cavi_adobe_mcp.adobe_authoring._png', side_effect=AdobeOutcomeUnknown('not valid PNG')),
+        with (patch('cavi_adobe_mcp.authoring.bridge._png', side_effect=AdobeOutcomeUnknown('not valid PNG')),
               self.assertRaises(AdobeOutcomeUnknown)):
             self.bridge.export(session, 'bad.png')
         count = len(self.bridge.requests)
@@ -438,7 +438,7 @@ class AdobeAuthoringTests(unittest.TestCase):
     def test_finalize_value_error_after_successful_export_is_unknown(self):
         session = self.session()
         error = ValueError('export receipt validation failed')
-        with (patch('cavi_adobe_mcp.adobe_authoring._png', side_effect=error),
+        with (patch('cavi_adobe_mcp.authoring.bridge._png', side_effect=error),
               self.assertRaises(AdobeOutcomeUnknown) as caught):
             self.bridge.export(session, 'mask.png')
         self.assertIs(caught.exception.__cause__, error)
@@ -522,7 +522,7 @@ class AdobeAuthoringTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder) / 'München Ω'
             directory.mkdir()
-            with patch('cavi_adobe_mcp.adobe_authoring.proc.run_sync', return_value=proc.Result(
+            with patch('cavi_adobe_mcp.authoring.bridge.proc.run_sync', return_value=proc.Result(
                     0, json.dumps(response), '')) as process:
                 result = AdobeAuthoring._native(self.bridge, request, state, directory)
             script = next(directory.glob('*.jsx')).read_text()
@@ -581,7 +581,7 @@ class AdobeAuthoringTests(unittest.TestCase):
     def test_global_cooperative_lock_prevents_another_instance(self):
         # Exercise the real OS lock without using the native transport or a user's app journal.
         bridge = AdobeAuthoring(self.root, 'photoshop')
-        with (patch('cavi_adobe_mcp.adobe_authoring.tempfile.gettempdir', return_value=str(self.root)),
+        with (patch('cavi_adobe_mcp.authoring.bridge.tempfile.gettempdir', return_value=str(self.root)),
               bridge._locked(), self.assertRaises(ValueError), bridge._locked()):
             self.fail('Second lock unexpectedly acquired')
 
@@ -608,14 +608,14 @@ class AdobeAuthoringTests(unittest.TestCase):
         self.assertEqual(result['native_id'], 7)
 
     def test_photoshop_profile_type_uses_color_profile_enum(self):
-        driver = Path(__file__).resolve().parents[1] / 'src/cavi_adobe_mcp/adobe_authoring.jsx'
+        driver = Path(__file__).resolve().parents[1] / 'src/cavi_adobe_mcp/authoring/driver.jsx'
         source = driver.read_text()
         self.assertIn('d.colorProfileType === ColorProfile.NONE', source)
         self.assertIn('temporary.colorProfileType = ColorProfile.NONE', source)
         self.assertNotIn('ColorProfileType', source)
 
     def test_photoshop_resize_uses_native_resampling_and_editable_snapshot(self):
-        driver = Path(__file__).resolve().parents[1] / 'src/cavi_adobe_mcp/adobe_authoring.jsx'
+        driver = Path(__file__).resolve().parents[1] / 'src/cavi_adobe_mcp/authoring/driver.jsx'
         source = driver.read_text()
         self.assertIn('d.resizeImage(new UnitValue(r.resize_width, "px")', source)
         self.assertIn('d.resolution, ResampleMethod.BICUBICSHARPER', source)
@@ -630,7 +630,7 @@ class AdobeCanvasProtocolTests(unittest.IsolatedAsyncioTestCase):
             workspace.mkdir()
             data.mkdir()
             parameters = StdioServerParameters(command=sys.executable,
-                args=['-m', 'cavi_adobe_mcp.authoring_server'],
+                args=['-m', 'cavi_adobe_mcp.authoring.server'],
                 env={**os.environ, 'CAVI_ADOBE_WORKSPACE': str(workspace)})
             async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as client:
                 await client.initialize()

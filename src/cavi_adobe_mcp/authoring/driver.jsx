@@ -1,4 +1,4 @@
-/* Fixed native operations for adobe_authoring.py. No caller-supplied script is evaluated. */
+/* Fixed native operations for bridge.py. No caller-supplied script is evaluated. */
 var CAVI_RESPONSE = (function (r) {
     function quote(s) {
         return '"' + String(s).replace(/[\\"\x00-\x1f\u2028\u2029]/g, function (c) {

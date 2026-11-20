@@ -10,8 +10,8 @@ from cavi_mcp_core.server import Server
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import dimension_authoring
-from .config import workspace
+from ..core.config import workspace
+from . import bridge
 
 mcp = Server("cavi-adobe-dimension", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Inspect an already-running Adobe Dimension instance or submit one workspace-owned scene render. "
@@ -55,13 +55,13 @@ class DimensionLaunchResult(Result):
 
 
 def host():
-    return dimension_authoring.DimensionAuthoring(workspace())
+    return bridge.DimensionAuthoring(workspace())
 
 
 async def invoke(function):
     try:
         return await anyio.to_thread.run_sync(function)
-    except (dimension_authoring.DimensionRejected, dimension_authoring.DimensionUnknown,
+    except (bridge.DimensionRejected, bridge.DimensionUnknown,
             OSError, ValueError) as exc:
         raise ToolError(str(exc)) from exc
 

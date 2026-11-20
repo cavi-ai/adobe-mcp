@@ -15,8 +15,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from cavi_adobe_mcp import art_media as media
-from cavi_adobe_mcp import authoring_server, native_media
+from cavi_adobe_mcp.authoring import server
+from cavi_adobe_mcp.media import frames as media
+from cavi_adobe_mcp.media import review_movie
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHORING_TOOLS = {
@@ -106,10 +107,10 @@ class MediaTests(unittest.TestCase):
 
     def test_owned_adobe_inspection_matches_output_contract(self):
         snapshot = {"runtime": {"running": True}, "pending_operation": None, "version": "test"}
-        with patch.object(authoring_server, "app") as host:
+        with patch.object(server, "app") as host:
             host.return_value.inspect_session.return_value = {"session": {"session_id": "test"}, "native": snapshot}
-            result = authoring_server.adobe_inspect("photoshop", "test")
-        parsed = authoring_server.AdobeSnapshot.model_validate(result)
+            result = server.adobe_inspect("photoshop", "test")
+        parsed = server.AdobeSnapshot.model_validate(result)
         self.assertEqual(parsed.runtime, snapshot["runtime"])
         self.assertEqual(result["session"], {"session_id": "test"})
 
@@ -118,7 +119,7 @@ class MediaTests(unittest.TestCase):
         (self.root / "recipe.json").write_text(json.dumps(self.spec))
         result = media.ingest(self.root, "recipe.json", "ingest")
         with patch.object(media, "MAX_EXPANDED_PIXELS", 100):
-            for action in (media.editorial, native_media.review_movie):
+            for action in (media.editorial, review_movie.review_movie):
                 with self.subTest(action=action.__name__), self.assertRaisesRegex(ValueError, "expanded RGBA"):
                     action(self.root, result["receipt"], "oversized")
                 self.assertFalse((self.root / "oversized").exists())
@@ -132,15 +133,15 @@ class MediaTests(unittest.TestCase):
         result = media.ingest(self.root, "recipe.json", "ingest")
         with (patch.dict(os.environ, {"PATH": str(self.root / "empty")}),
               patch.object(apps, "HOMEBREW", (brew,)),
-              self.assertRaises(native_media.MediaOutcomeUnknown)):
-            native_media.review_movie(self.root, result["receipt"], "movie")
+              self.assertRaises(review_movie.MediaOutcomeUnknown)):
+            review_movie.review_movie(self.root, result["receipt"], "movie")
         self.assertEqual(media.load(self.root / "movie/execution.json")["exit_code"], 3)
 
     def test_native_process_failure_retains_unknown_execution(self):
         directory = self.root / "process"
         directory.mkdir()
-        with self.assertRaises(native_media.MediaOutcomeUnknown):
-            native_media.run([sys.executable, "-c", "raise SystemExit(3)"], directory)
+        with self.assertRaises(review_movie.MediaOutcomeUnknown):
+            review_movie.run([sys.executable, "-c", "raise SystemExit(3)"], directory)
         execution = media.load(directory / "execution.json")
         self.assertEqual(execution["state"], "unknown")
         self.assertEqual(execution["exit_code"], 3)
@@ -154,7 +155,7 @@ class MediaProtocolTests(unittest.IsolatedAsyncioTestCase):
             fixture(root)
             env = {**os.environ, "CAVI_ADOBE_WORKSPACE": str(root)}
             params = StdioServerParameters(command=sys.executable,
-                args=["-m", "cavi_adobe_mcp.authoring_server"], env=env)
+                args=["-m", "cavi_adobe_mcp.authoring.server"], env=env)
             async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
                 await client.initialize()
                 catalog = {x.name: x for x in (await client.list_tools()).tools}
