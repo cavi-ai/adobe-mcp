@@ -84,6 +84,46 @@ function caviResizeImage(c) {
         throw Error("Photoshop resize readback differs from the requested dimensions");
     return result;
 }
+function caviTextRuns(layer, budget) {
+    // The style runs of one text layer: range, PostScript font and whether Photoshop can use it.
+    var ref = new ActionReference(); ref.putIdentifier(charIDToTypeID("Lyr "), layer.id);
+    var ranges = executeActionGet(ref).getObjectValue(stringIDToTypeID("textKey"))
+        .getList(stringIDToTypeID("textStyleRange"));
+    var psKey = stringIDToTypeID("fontPostScriptName"), availableKey = stringIDToTypeID("fontAvailable");
+    var runs = [];
+    for (var i = 0; i < ranges.count; i++) {
+        if (--budget.remaining < 0) throw Error("Document exceeds the 4096-run text font limit");
+        var range = ranges.getObjectValue(i), style = range.getObjectValue(stringIDToTypeID("textStyle"));
+        runs.push({from: range.getInteger(stringIDToTypeID("from")), to: range.getInteger(stringIDToTypeID("to")),
+                   postscript_name: style.hasKey(psKey) ? style.getString(psKey) : null,
+                   available: style.hasKey(availableKey) ? style.getBoolean(availableKey) : false});
+    }
+    return runs;
+}
+function caviRequireFont(name) {
+    var fontList = app.fonts;
+    for (var i = 0; i < fontList.length; i++)
+        if (fontList[i].postScriptName === name) return;
+    throw Error("Exact PostScript font is unavailable; use fonts discovery");
+}
+function caviRequireRunFont(layer, font) {
+    // Assigning a font Photoshop cannot use raises nothing; the runs show what the layer really uses.
+    var runs = caviTextRuns(layer, {remaining: 4096});
+    if (!runs.length) throw Error("Native text reports no style runs");
+    for (var i = 0; i < runs.length; i++)
+        if (runs[i].postscript_name !== font || runs[i].available !== true)
+            throw Error("Native text run uses another or unavailable font: " + runs[i].postscript_name);
+}
+function caviTextFonts(c) {
+    var items = c.layers(c.d, [], {remaining: 2048}), layers = [], budget = {remaining: 4096};
+    for (var i = 0; i < items.length; i++) {
+        if (items[i].text === undefined) continue;
+        var layer = c.layerAt(c.d, items[i].path, items[i].name);
+        layers.push({path: items[i].path, name: items[i].name, native_id: items[i].id,
+                     runs: caviTextRuns(layer, budget)});
+    }
+    return {layers: layers};
+}
 function caviExportDocument(c, output) {
     var r = c.r, d = c.d, profile = null;
     if (r.kind !== "png") throw Error("Photoshop SVG export is unsupported");
@@ -190,7 +230,7 @@ var CAVI_HOST = {
     },
     exportDocument: caviExportDocument,
     initial: {create_canvas: caviCreateCanvas},
-    direct: {resize_image: caviResizeImage},
+    direct: {resize_image: caviResizeImage, text_fonts: caviTextFonts},
     ops: {
         edit_layers: {
             check: function (c) {
@@ -270,10 +310,7 @@ var CAVI_HOST = {
         add_text: {
             check: function (c) {
                 c.rgbDocument(c.d);
-                var chosen = null, fontList = app.fonts;
-                for (var i = 0; i < fontList.length; i++)
-                    if (fontList[i].postScriptName === c.r.font) chosen = fontList[i];
-                if (!chosen) throw Error("Exact PostScript font is unavailable; use fonts discovery");
+                caviRequireFont(c.r.font);
             },
             run: function (c) {
                 var r = c.r;
@@ -282,7 +319,22 @@ var CAVI_HOST = {
                 textItem.position = r.position; textItem.size = new UnitValue(r.size, "pt");
                 textItem.color = caviSolid(r.rgb);
                 if (textItem.font !== r.font) throw Error("Native text substituted the requested font: " + textItem.font);
+                caviRequireRunFont(item, r.font);
                 c.item = item;
+            }
+        },
+        set_text_font: {
+            check: function (c) {
+                var r = c.r, item = c.layerAt(c.d, r.layer_path, r.expected_name);
+                if (item.typename !== "ArtLayer" || item.kind !== LayerKind.TEXT)
+                    throw Error("Target is not a text layer");
+                if (item.allLocked) throw Error("Target layer is locked");
+                caviRequireFont(r.font);
+                c.item = item;
+            },
+            run: function (c) {
+                c.item.textItem.font = c.r.font;
+                caviRequireRunFont(c.item, c.r.font);
             }
         },
         apply_mask: {

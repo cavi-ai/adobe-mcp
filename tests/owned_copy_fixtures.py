@@ -26,6 +26,8 @@ class ContractTransport:
         super().__init__(workspace)
         self.requests = []
         self.error = None
+        self.fonts_receipt = []
+        self.text_layers = []
         self.process = {'pid': 123, 'started': 'fixture'}
 
     def status(self):
@@ -52,6 +54,10 @@ class ContractTransport:
                 destination.write_bytes(png_bytes())
         if request['action'] == 'inspect':
             return {'documents': []}
+        if request['action'] == 'fonts':
+            return {'fonts': list(self.fonts_receipt)}
+        if request['action'] == 'text_fonts':
+            return {'layers': list(self.text_layers)}
         snapshot = {'name': Path(request['document_path']).name, 'path': request['document_path'],
                 'native_id': 42, 'identity': 'document_id_and_retained_reference', 'saved': True,
                 'width': 1, 'height': 1, 'units': 'pixels', 'color_profile': None,

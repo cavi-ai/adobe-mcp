@@ -14,13 +14,15 @@
       "title": "Photoshop",
       "pages": [
         { "title": "Tools", "path": "photoshop/tools.md" },
+        { "title": "Fonts", "path": "photoshop/fonts.md" },
         { "title": "Generative tools", "path": "photoshop/generative.md" }
       ]
     },
     {
       "title": "Illustrator",
       "pages": [
-        { "title": "Tools", "path": "illustrator/tools.md" }
+        { "title": "Tools", "path": "illustrator/tools.md" },
+        { "title": "Fonts", "path": "illustrator/fonts.md" }
       ]
     },
     {

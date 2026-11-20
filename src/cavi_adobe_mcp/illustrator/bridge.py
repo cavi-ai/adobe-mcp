@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from ..core.extendscript import AdobeOutcomeUnknown, OwnedCopyHost
+from ..core.extendscript import AdobeOutcomeUnknown, OwnedCopyHost, _name, validate_edits
 
 
 def _svg(path, *, native_export=False):
@@ -55,6 +55,16 @@ class IllustratorAuthoring(OwnedCopyHost):
     SUFFIX = ".ai"
     SOURCES = frozenset({".ai", ".svg", ".png"})
     DRIVER = Path(__file__).with_name("driver.jsx")
+
+    def set_text_font(self, session_id, layer_path, expected_name, frame_index, font):
+        """Give one text frame of an exact layer an exact font name."""
+        validate_edits([{"path": layer_path, "expected_name": expected_name, "visible": True}])
+        if type(frame_index) is not int or not 0 <= frame_index <= 10000:
+            raise ValueError("frame_index must be an integer in 0..10000")
+        _name(font)
+        return self._owned_action(session_id, "set_text_font", {
+            "layer_path": layer_path, "expected_name": expected_name,
+            "frame_index": frame_index, "font": font})
 
     def _check_source(self, path):
         if path.suffix.lower() == ".svg":

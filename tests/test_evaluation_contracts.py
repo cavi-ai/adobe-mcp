@@ -67,6 +67,8 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(status.structured_content["launches_application"])
 
 
+FONT_TOOLS = {"photoshop": ("photoshop_fonts", "photoshop_text_fonts", "photoshop_set_text_font"),
+              "illustrator": ("illustrator_set_text_font",)}
 GENERATIVE_TOOLS = ("photoshop_generative_fill", "photoshop_remove_background",
                     "photoshop_generative_upscale")
 
@@ -114,6 +116,41 @@ class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(rejected.structured_content["error"]["outcome"], "rejected")
             status = await client.call_tool("photoshop_status", {})
             self.assertFalse(status.is_error)
+
+    async def test_font_tools_stay_within_the_discovery_budgets(self):
+        for server, names in FONT_TOOLS.items():
+            with self.subTest(server=server):
+                budget = json.loads((ROOT / f"evals/{server}.manifest.json").read_text())["probes"][0]
+                parameters = StdioServerParameters(command=sys.executable, args=[
+                    str(ROOT / "evals/simulated_server.py"), server])
+                async with stdio_client(parameters) as (reader, writer), \
+                        ClientSession(reader, writer) as client:
+                    await client.initialize()
+                    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                self.assertLessEqual(len(tools), budget["max_tools"])
+                for name in names:
+                    self.assertIn(name, tools)
+                    self.assertFalse(tools[name].annotations.open_world_hint)
+
+    async def test_manifest_probes_each_font_tool_with_a_rejected_input(self):
+        for server, names in FONT_TOOLS.items():
+            with self.subTest(server=server):
+                manifest = json.loads((ROOT / f"evals/{server}.inspection.manifest.json").read_text())
+                probes = {probe["tool"]: probe for probe in manifest["probes"]
+                          if probe.get("tool") in names}
+                self.assertEqual(sorted(probes), sorted(names))
+                parameters = StdioServerParameters(command=sys.executable, args=[
+                    str(ROOT / "evals/simulated_server.py"), server])
+                async with stdio_client(parameters) as (reader, writer), \
+                        ClientSession(reader, writer) as client:
+                    await client.initialize()
+                    for name, probe in probes.items():
+                        self.assertEqual(probe["expect"], {"outcome": "error"})
+                        rejected = await client.call_tool(name, probe["arguments"])
+                        self.assertTrue(rejected.is_error, name)
+                        self.assertEqual(rejected.structured_content["error"]["outcome"], "rejected")
+                    status = await client.call_tool(f"{server}_status", {})
+                    self.assertFalse(status.is_error)
 
     async def test_overlong_generative_fill_prompt_is_rejected(self):
         parameters = StdioServerParameters(command=sys.executable, args=[

@@ -9,6 +9,12 @@ function caviCollectText(parent, text) {
         else if (page.typename === "GroupItem") caviCollectText(page, text);
     }
 }
+function caviFindFont(name) {
+    var fontList = app.textFonts;
+    for (var i = 0; i < fontList.length; i++)
+        if (fontList[i].name === name) return fontList[i];
+    return null;
+}
 function caviExportDocument(c, output) {
     var r = c.r, d = c.d;
     c.rgbDocument(d);
@@ -158,9 +164,7 @@ var CAVI_HOST = {
         add_text: {
             check: function (c) {
                 c.rgbDocument(c.d);
-                var chosen = null, fontList = app.textFonts;
-                for (var i = 0; i < fontList.length; i++)
-                    if (fontList[i].name === c.r.font) chosen = fontList[i];
+                var chosen = caviFindFont(c.r.font);
                 if (!chosen) throw Error("Exact PostScript font is unavailable; use fonts discovery");
                 c.font = chosen;
             },
@@ -173,7 +177,28 @@ var CAVI_HOST = {
                 textFrame.textRange.characterAttributes.textFont = c.font;
                 textFrame.textRange.characterAttributes.size = r.size;
                 textFrame.textRange.characterAttributes.fillColor = caviRgb(r.rgb);
+                if (textFrame.textRange.characterAttributes.textFont.name !== r.font)
+                    throw Error("Native text substituted the requested font: "
+                                + textFrame.textRange.characterAttributes.textFont.name);
                 c.item = item;
+            }
+        },
+        set_text_font: {
+            check: function (c) {
+                var r = c.r, item = c.layerAt(c.d, r.layer_path, r.expected_name);
+                if (item.locked) throw Error("Target layer is locked");
+                if (r.frame_index >= item.textFrames.length) throw Error("Text frame no longer exists");
+                c.frame = item.textFrames[r.frame_index];
+                if (c.frame.locked) throw Error("Target text frame is locked");
+                c.font = caviFindFont(r.font);
+                if (!c.font) throw Error("Exact PostScript font is unavailable; use fonts discovery");
+                c.item = item;
+            },
+            run: function (c) {
+                var attributes = c.frame.textRange.characterAttributes;
+                attributes.textFont = c.font;
+                if (attributes.textFont.name !== c.r.font)
+                    throw Error("Native text substituted the requested font: " + attributes.textFont.name);
             }
         },
         apply_mask: {

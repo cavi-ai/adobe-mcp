@@ -20,7 +20,7 @@ ILLUSTRATOR_TOOLS = {
     'illustrator_edit_layers', 'illustrator_add_layer', 'illustrator_place_image',
     'illustrator_add_rectangle', 'illustrator_add_path', 'illustrator_add_text',
     'illustrator_apply_mask', 'illustrator_export', 'illustrator_close_copy',
-    'illustrator_operation_control',
+    'illustrator_operation_control', 'illustrator_set_text_font',
 }
 
 

@@ -5,8 +5,8 @@ layers, paths or timelines editable, and records every native operation before i
 
 | Server command | Application | What it does |
 |---|---|---|
-| `cavi-photoshop-mcp` | Photoshop | Opens owned PSD copies or new canvases, edits layers, text, paths and masks, runs the generative tools, and exports PNG. 19 tools. |
-| `cavi-illustrator-mcp` | Illustrator | Opens owned AI copies, edits layers, text, paths and masks, and exports SVG or PNG. 14 tools. |
+| `cavi-photoshop-mcp` | Photoshop | Opens owned PSD copies or new canvases, edits layers, text, paths and masks, runs the generative tools, and exports PNG. 21 tools. |
+| `cavi-illustrator-mcp` | Illustrator | Opens owned AI copies, edits layers, text, paths and masks, and exports SVG or PNG. 15 tools. |
 | `cavi-animate-mcp` | Animate | Opens owned FLA copies, authors timelines, exports the frames with a media receipt, and makes review movies with FFmpeg. 10 tools. |
 | `cavi-dimension-mcp` | Dimension | Starts a render of a saved scene and verifies the rendered PNG. |
 
@@ -19,11 +19,11 @@ never launches an application, signs in or requests a permission. Only `dimensio
 
 Each tool name starts with its application, and no tool takes an `application` parameter.
 
-| Group | Photoshop (19) | Illustrator (14) |
+| Group | Photoshop (21) | Illustrator (15) |
 |---|---|---|
-| Read | `photoshop_status`, `photoshop_inspect`, `photoshop_fonts` | `illustrator_status`, `illustrator_inspect`, `illustrator_fonts` |
+| Read | `photoshop_status`, `photoshop_inspect`, `photoshop_fonts`, `photoshop_text_fonts` | `illustrator_status`, `illustrator_inspect`, `illustrator_fonts` |
 | Open and close | `photoshop_open_copy`, `photoshop_create_canvas`, `photoshop_close_copy` | `illustrator_open_copy`, `illustrator_close_copy` |
-| Edit | `photoshop_resize_image`, `photoshop_edit_layers`, `photoshop_add_group`, `photoshop_place_image`, `photoshop_add_rectangle`, `photoshop_add_path`, `photoshop_add_text`, `photoshop_apply_mask` | `illustrator_edit_layers`, `illustrator_add_layer`, `illustrator_place_image`, `illustrator_add_rectangle`, `illustrator_add_path`, `illustrator_add_text`, `illustrator_apply_mask` |
+| Edit | `photoshop_resize_image`, `photoshop_edit_layers`, `photoshop_add_group`, `photoshop_place_image`, `photoshop_add_rectangle`, `photoshop_add_path`, `photoshop_add_text`, `photoshop_set_text_font`, `photoshop_apply_mask` | `illustrator_edit_layers`, `illustrator_add_layer`, `illustrator_place_image`, `illustrator_add_rectangle`, `illustrator_add_path`, `illustrator_add_text`, `illustrator_set_text_font`, `illustrator_apply_mask` |
 | Generative | `photoshop_generative_fill`, `photoshop_remove_background`, `photoshop_generative_upscale` | none |
 | Export and recovery | `photoshop_export`, `photoshop_operation_control` | `illustrator_export`, `illustrator_operation_control` |
 

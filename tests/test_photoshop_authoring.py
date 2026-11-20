@@ -22,6 +22,7 @@ PHOTOSHOP_TOOLS = {
     'photoshop_add_path', 'photoshop_add_text', 'photoshop_apply_mask',
     'photoshop_generative_fill', 'photoshop_remove_background', 'photoshop_generative_upscale',
     'photoshop_export', 'photoshop_close_copy', 'photoshop_operation_control',
+    'photoshop_text_fonts', 'photoshop_set_text_font',
 }
 
 

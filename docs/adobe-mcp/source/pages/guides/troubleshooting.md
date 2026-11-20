@@ -38,6 +38,7 @@ call with `PROMPT_BLOCKED` or `AUTHENTICATION_BOUNDARY`.
 | `Destination already exists` / `Output must not already exist` | Outputs must be new paths. |
 | `Layer name changed; inspect the exact path again` | The layer at that path is not the one you named. Inspect and use the current `path` and `name`. |
 | `Exact PostScript font is unavailable; use fonts discovery` | Use a `postscript_name` from `photoshop_fonts` or `illustrator_fonts`. |
+| `Native text run uses another or unavailable font` / `Native text substituted the requested font` | Photoshop or Illustrator replaced the font you asked for, and the outcome is unknown. Inspect the copy, activate the font in Creative Cloud if it is an Adobe Font, then use `photoshop_text_fonts` to find the layers with `available` `false` and `photoshop_set_text_font` or `illustrator_set_text_font` to set a listed font. See [Photoshop fonts](../photoshop/fonts.md). |
 | `Rectangle exceeds document bounds` / `Fill bounds exceed document bounds` | Shrink `bounds` to the document. |
 | `Layer already has a mask` | One mask per layer. A generated layer already has one. |
 | `Remove Background requires a pixel or smart object layer that is not the background` | Pick another layer. |

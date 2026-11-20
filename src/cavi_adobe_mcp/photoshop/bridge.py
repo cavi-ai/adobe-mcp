@@ -12,7 +12,11 @@ from typing import Literal
 
 from cavi_mcp_core.media import digest
 
-from ..core.extendscript import AdobeOutcomeUnknown, OwnedCopyHost, _number, validate_edits
+from ..core.extendscript import AdobeOutcomeUnknown, OwnedCopyHost, _name, _number, validate_edits
+from .fontlist import classify_font_file, font_list_location, read_font_list
+
+MAX_TEXT_LAYERS = 2048
+MAX_TEXT_RUNS = 4096
 
 
 class PhotoshopAuthoring(OwnedCopyHost):
@@ -25,6 +29,52 @@ class PhotoshopAuthoring(OwnedCopyHost):
     SOURCES = frozenset({".psd", ".png"})
     DRIVER = Path(__file__).with_name("driver.jsx")
     INITIAL_ACTIONS = ("open_copy", "create_canvas")
+
+    @staticmethod
+    def _home():
+        return Path.home()
+
+    def fonts(self, family=None):
+        """Native fonts with the kind of font each is, read from Photoshop's font list."""
+        if family is not None and (not isinstance(family, str) or not 1 <= len(family) <= 128
+                                   or any(ord(c) < 32 for c in family)):
+            raise ValueError("family must contain 1..128 printable characters")
+        result = self._read("fonts")
+        application = result["runtime"]["application"]
+        home = self._home()
+        location = font_list_location(application, home)
+        listing = read_font_list(location) if location else None
+        records, modified = listing if listing else ({}, None)
+        fonts = []
+        for font in result["fonts"]:
+            if family is not None and font["family"].casefold() != family.casefold():
+                continue
+            file = records.get(font["postscript_name"])
+            fonts.append({**font, "file": file,
+                          "source": classify_font_file(file, home=home, application=application)})
+        return {**result, "fonts": fonts,
+                "font_list": {"path": str(location), "modified": modified} if listing else None}
+
+    def text_fonts(self, session_id):
+        """Every text layer's style runs with the PostScript font each uses and whether Photoshop has it."""
+        packet = self._session(session_id)
+        result = self._read("text_fonts", packet)
+        layers = result.get("layers")
+        if not isinstance(layers, list) or len(layers) > MAX_TEXT_LAYERS:
+            raise ValueError("Native text font receipt exceeds the 2048-layer limit")
+        runs = sum(len(layer["runs"]) for layer in layers)
+        if runs > MAX_TEXT_RUNS:
+            raise ValueError("Document exceeds the 4096-run text font limit")
+        missing = sorted({run["postscript_name"] for layer in layers for run in layer["runs"]
+                          if run["available"] is False and isinstance(run["postscript_name"], str)})
+        return {**result, "missing_fonts": missing}
+
+    def set_text_font(self, session_id, layer_path, expected_name, font):
+        """Give every run of one exact text layer an exact PostScript font."""
+        validate_edits([{"path": layer_path, "expected_name": expected_name, "visible": True}])
+        _name(font)
+        return self._owned_action(session_id, "set_text_font", {
+            "layer_path": layer_path, "expected_name": expected_name, "font": font})
 
     def _verify(self, action, payload, result):
         if action != "create_canvas":

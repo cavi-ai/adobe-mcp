@@ -46,8 +46,8 @@ to `.tmp/evals/<run>/`.
 
 | Server | Protocol manifest limits |
 |---|---|
-| Photoshop | at most 19 tools and 20,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
-| Illustrator | at most 14 tools and 15,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
+| Photoshop | at most 21 tools and 20,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
+| Illustrator | at most 15 tools and 15,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
 | Animate | at most 10 tools and 12,000 schema bytes; at most 6,000 tokens in total and 3,000 per tool |
 | Dimension | at most 6 tools and 5,000 schema bytes; at most 3,000 tokens in total and per tool |
 

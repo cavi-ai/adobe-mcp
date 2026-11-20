@@ -89,6 +89,45 @@
       }
     },
     {
+      "id": "fonts-rejects-empty-family",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_fonts",
+      "arguments": {
+        "family": ""
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "text-fonts-rejects-session",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_text_fonts",
+      "arguments": {
+        "session_id": "unused"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "set-text-font-rejects-layer-path",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_set_text_font",
+      "arguments": {
+        "session_id": "unused",
+        "layer_path": [],
+        "expected_name": "Title",
+        "font": "Osaka"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
       "id": "read-sequence",
       "probe": "workflow",
       "access": "read_only",

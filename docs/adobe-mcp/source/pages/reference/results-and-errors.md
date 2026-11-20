@@ -10,7 +10,8 @@ This page lists what these servers return.
 | Tool | Result |
 |---|---|
 | `photoshop_status`, `illustrator_status` | `app`, `application`, `version`, `running`, `launches_application` `false`, `authenticates` `false` |
-| `photoshop_inspect`, `photoshop_fonts`, `illustrator_inspect`, `illustrator_fonts` | `runtime`, `pending_operation`, plus `version` and `documents`, or `fonts`; with a `session_id`, the owned copy's snapshot and `session` |
+| `photoshop_inspect`, `photoshop_fonts`, `illustrator_inspect`, `illustrator_fonts` | `runtime`, `pending_operation`, plus `version` and `documents`, or `fonts`; with a `session_id`, the owned copy's snapshot and `session`. `photoshop_fonts` also returns `font_list` and a `source` and `file` for each font ([Photoshop fonts](../photoshop/fonts.md)) |
+| `photoshop_text_fonts` | `runtime`, `pending_operation`, `layers` and `missing_fonts` |
 | every tool that changes a document | the mutation result below |
 | `photoshop_operation_control`, `illustrator_operation_control` | `state`, `operation_id`, `session_id`, `retry_safe`, `completion_available`, `can_reconcile`, `copy_sha256`, `native_sha256`, `document` |
 
