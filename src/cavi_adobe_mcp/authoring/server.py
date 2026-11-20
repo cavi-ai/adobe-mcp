@@ -58,6 +58,14 @@ class AdobeMutation(Result):
     retry_safe: Literal[False]
 
 
+class AdobeGenerative(AdobeMutation):
+    generative: dict | None = None
+
+
+class AdobeExport(AdobeMutation):
+    generative_operations: list[dict] | None = None
+
+
 class AdobeCanvas(AdobeMutation):
     source_kind: Literal["canvas_recipe"]
     source_sha256_kind: Literal["canvas_recipe_json"]
@@ -160,7 +168,7 @@ def adobe_add_rectangle(application: App, session_id: str, name: str,
 
 @mcp.tool(annotations=WRITE)
 def adobe_export(application: App, session_id: str, destination: str,
-                  kind: Literal["png", "svg"] | None = None, usage: Literal["color", "data"] = "color") -> AdobeMutation:
+                  kind: Literal["png", "svg"] | None = None, usage: Literal["color", "data"] = "color") -> AdobeExport:
     """Export native-depth Photoshop PNG or vector Illustrator SVG by default; PNG24 is explicit."""
     return invoke(app(application).export, session_id, destination, kind=kind, usage=usage)
 
@@ -248,7 +256,7 @@ CLOUD = MUTATE.model_copy(update={"open_world_hint": True})
 @mcp.tool(annotations=CLOUD)
 def adobe_generative_fill(application: Literal["photoshop"], session_id: str,
                           prompt: Annotated[str, Field(max_length=1000)],
-                          bounds: Annotated[list[float], Field(min_length=4, max_length=4)] | None = None) -> AdobeMutation:
+                          bounds: Annotated[list[float], Field(min_length=4, max_length=4)] | None = None) -> AdobeGenerative:
     """Generate a new layer from a prompt in x,y,width,height px, or the whole canvas. Sends pixels to Adobe and
     spends generative credits; Photoshop's one-time Generative Credits notice must already be acknowledged."""
     return invoke(app(application, 120).generative_fill, session_id, prompt, bounds)
@@ -262,7 +270,7 @@ def adobe_remove_background(application: Literal["photoshop"], session_id: str, 
 
 
 @mcp.tool(annotations=CLOUD)
-def adobe_generative_upscale(application: Literal["photoshop"], session_id: str) -> AdobeMutation:
+def adobe_generative_upscale(application: Literal["photoshop"], session_id: str) -> AdobeGenerative:
     """Double an owned PSD of at most 1440 px per side and add the upscaled image as a new top layer.
     Sends pixels to Adobe and may spend generative credits."""
     return invoke(app(application, 120).generative_upscale, session_id)
