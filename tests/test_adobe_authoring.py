@@ -2,6 +2,7 @@
 
 import json
 import os
+import plistlib
 import shutil
 import struct
 import sys
@@ -10,6 +11,7 @@ import unittest
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cavi_mcp_core import proc
@@ -75,6 +77,8 @@ class ContractBridge(AdobeAuthoring):
                             color_profile='sRGB IEC61966-2.1')
         if request['action'] == 'resize_image':
             snapshot.update(width=request['resize_width'], height=request['resize_height'])
+        if request['action'] in ('generative_fill', 'generative_upscale'):
+            snapshot['changed_layers'] = [{'path': [0], 'name': 'Generated ' + request['action']}]
         return snapshot
 
 
@@ -142,6 +146,70 @@ class AdobeAuthoringTests(unittest.TestCase):
         result = self.bridge.generative_upscale(session)
         self.assertEqual(self.bridge.requests[-1]['action'], 'generative_upscale')
         self.assertIn('layers', result['document'])
+
+    def test_generated_pixels_are_recorded_and_carried_into_the_export_receipt(self):
+        session = self.session()
+        fill = self.bridge.generative_fill(session, 'a red apple', [0, 0, 1, 1])
+        self.assertEqual(fill['generative'], {
+            'tool': 'adobe_generative_fill', 'service': 'Adobe Firefly in Photoshop',
+            'prompt': 'a red apple', 'bounds': [0, 0, 1, 1],
+            'layers': [{'path': [0], 'name': 'Generated generative_fill'}]})
+        upscale = self.bridge.generative_upscale(session)
+        self.assertEqual(upscale['generative'], {
+            'tool': 'adobe_generative_upscale', 'service': 'Adobe Firefly in Photoshop',
+            'prompt': None, 'bounds': None,
+            'layers': [{'path': [0], 'name': 'Generated generative_upscale'}]})
+        self.bridge.remove_background(session, [0], 'Subject')
+        expected = [{**fill['generative'], 'operation_id': fill['operation_id']},
+                    {**upscale['generative'], 'operation_id': upscale['operation_id']}]
+        saved = json.loads((self.root / '.adobe-authoring' / (session + '.json')).read_text())
+        self.assertEqual(saved['generative_operations'], expected)
+        result = self.bridge.export(session, 'out.png')
+        receipt = json.loads((self.root / 'out.png.receipt.json').read_text())
+        self.assertEqual(result['generative_operations'], expected)
+        self.assertEqual(receipt['generative_operations'], expected)
+        inspected = self.bridge.inspect_session(session)['session']
+        self.assertNotIn('ownership_token', inspected)
+        self.assertEqual(inspected['generative_operations'], expected)
+
+    def test_failed_generative_operation_is_not_recorded(self):
+        session = self.session()
+        self.bridge.error = AdobeCommandRejected('rejected by native preflight')
+        with self.assertRaises(AdobeCommandRejected):
+            self.bridge.generative_fill(session, 'a red apple')
+        self.bridge.error = None
+        self.assertNotIn('generative_operations', self.bridge._session(session))
+
+    def test_export_without_generative_operations_lists_none(self):
+        session = self.session()
+        self.bridge.add_rectangle(session, 'Box', [0, 0, 1, 1], [1, 2, 3])
+        result = self.bridge.export(session, 'plain.png')
+        receipt = json.loads((self.root / 'plain.png.receipt.json').read_text())
+        self.assertEqual(result['generative_operations'], [])
+        self.assertEqual(receipt['generative_operations'], [])
+
+    def test_artifacts_carry_a_workspace_relative_path(self):
+        result = self.bridge.open_copy('source.png', 'working.psd')
+        self.assertEqual(result['copy']['relative_path'], 'working.psd')
+        self.assertEqual(result['copy']['path'], str(self.root / 'working.psd'))
+        self.assertEqual(set(result['copy']), {'path', 'relative_path', 'sha256', 'bytes'})
+        outside = Path(tempfile.gettempdir()).resolve() / 'cavi-outside-artifact.bin'
+        outside.write_bytes(b'x')
+        self.addCleanup(outside.unlink)
+        self.assertEqual(set(self.bridge._artifact(outside)), {'path', 'sha256', 'bytes'})
+
+    def test_runtime_check_after_dispatch_is_an_unknown_outcome(self):
+        bridge = AdobeAuthoring(self.root, 'photoshop')
+        process = {'pid': 1, 'started': 'fixture'}
+        state = {'application': '/fixture/app', 'process': process}
+        stopped = {'app': 'photoshop', 'running': False, 'process': None}
+        response = json.dumps({'operation_id': 'a' * 32, 'ok': True, 'result': {}})
+        done = SimpleNamespace(returncode=0, stdout=response, stderr='')
+        with (tempfile.TemporaryDirectory() as directory,
+              patch('cavi_adobe_mcp.authoring.bridge.proc.run_sync', return_value=done),
+              patch.object(AdobeAuthoring, 'status', return_value=stopped),
+              self.assertRaises(AdobeOutcomeUnknown)):
+            bridge._native({'operation_id': 'a' * 32}, state, Path(directory))
 
     def test_generative_tools_reject_illustrator_before_native_dispatch(self):
         bridge = ContractBridge(self.root, app='illustrator')
@@ -670,6 +738,37 @@ class AdobeCanvasProtocolTests(unittest.IsolatedAsyncioTestCase):
                     'application': 'photoshop', 'session_id': '0' * 32, 'width': True, 'height': 768})
                 self.assertTrue(rejected_resize.is_error)
                 self.assertFalse((workspace / '.adobe-authoring').exists())
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'native Adobe preconditions are checked on macOS')
+class AdobePreconditionProtocolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_not_running_application_is_a_rejected_outcome_with_its_message(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            workspace, app = root / 'workspace', root / 'Fixture.app'
+            workspace.mkdir()
+            (app / 'Contents' / 'MacOS').mkdir(parents=True)
+            (app / 'Contents' / 'MacOS' / 'Fixture').write_bytes(b'')
+            (app / 'Contents' / 'Info.plist').write_bytes(plistlib.dumps({
+                'CFBundleIdentifier': 'com.adobe.Photoshop', 'CFBundleExecutable': 'Fixture',
+                'CFBundleShortVersionString': '1.0'}))
+            (workspace / 'source.png').write_bytes(png_bytes())
+            parameters = StdioServerParameters(command=sys.executable,
+                args=['-m', 'cavi_adobe_mcp.authoring.server'],
+                env={**os.environ, 'CAVI_ADOBE_WORKSPACE': str(workspace),
+                     'CAVI_PHOTOSHOP_APP': str(app)})
+            async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as client:
+                await client.initialize()
+                for name, arguments in (
+                        ('adobe_open_copy', {'application': 'photoshop', 'source': 'source.png',
+                                             'destination': 'copy.psd'}),
+                        ('adobe_inspect', {'application': 'photoshop'})):
+                    with self.subTest(tool=name):
+                        result = await client.call_tool(name, arguments)
+                        self.assertTrue(result.is_error)
+                        self.assertEqual(result.structured_content['error']['outcome'], 'rejected')
+                        self.assertIn('App is not running', result.content[0].text)
+                self.assertFalse((workspace / 'copy.psd').exists())
 
 
 if __name__ == '__main__':

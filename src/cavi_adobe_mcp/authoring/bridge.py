@@ -24,7 +24,7 @@ from typing import Literal
 from cavi_mcp_core import apps, proc
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
 from cavi_mcp_core.files import inside, load_json
-from cavi_mcp_core.journal import archive, completion, fingerprint
+from cavi_mcp_core.journal import archive, completion, create_json, fingerprint
 from cavi_mcp_core.journal import write_json as _write_json
 from cavi_mcp_core.lock import FileLock
 from cavi_mcp_core.media import digest
@@ -45,6 +45,10 @@ SNAPSHOT_FIELDS = ("name", "path", "native_id", "identity", "saved", "width", "h
 
 class AdobeCommandRejected(OperationRejected):
     """Native preflight rejected a command before any document mutation."""
+
+
+class AdobePreconditionFailed(OperationRejected):
+    """The platform, app installation or process state refused work before any command was sent."""
 
 
 class AdobeOutcomeUnknown(OperationUnknown):
@@ -211,7 +215,7 @@ class AdobeAuthoring:
 
     def _application(self):
         if sys.platform != "darwin":
-            raise RuntimeError("Native Adobe authoring requires macOS")
+            raise AdobePreconditionFailed("Native Adobe authoring requires macOS")
         identifier, pattern, _, env, name = APPS[self.app]
         return apps.bundle(name, identifier, pattern, env, path=self.app_path)
 
@@ -220,7 +224,8 @@ class AdobeAuthoring:
         path, info, executable, _ = self._application()
         matches = [process._asdict() for process in apps.processes(executable)]
         if len(matches) > 1:
-            raise RuntimeError("Multiple app processes found; select a single instance before authoring")
+            raise AdobePreconditionFailed(
+                "Multiple app processes found; select a single instance before authoring")
         return {"app": self.app, "application": str(path), "version": info["CFBundleShortVersionString"],
                 "running": bool(matches), "process": matches[0] if matches else None,
                 "launches_application": False, "authenticates": False}
@@ -228,7 +233,8 @@ class AdobeAuthoring:
     def _runtime(self):
         state = self.status()
         if not state["running"]:
-            raise RuntimeError("App is not running; open it manually and resolve any prompts first")
+            raise AdobePreconditionFailed(
+                "App is not running; open it manually and resolve any prompts first")
         return state
 
     @contextmanager
@@ -238,7 +244,7 @@ class AdobeAuthoring:
         location.mkdir(mode=0o700, exist_ok=True)
         if location.is_symlink() or location.stat().st_uid != os.getuid():
             raise ValueError("Unsafe Adobe lock directory")
-        lock = FileLock(location / "lock")
+        lock = FileLock(location / "lock", follow=False)
         if not lock.acquire(blocking=False):
             raise ValueError("Another Adobe authoring operation is active")
         try:
@@ -301,7 +307,12 @@ class AdobeAuthoring:
             response = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise AdobeOutcomeUnknown("Adobe returned no valid command receipt") from exc
-        if self._runtime()["process"] != state["process"]:
+        try:
+            current = self._runtime()
+        except AdobePreconditionFailed as exc:
+            # The command was already dispatched, so the app state it left behind is unknown.
+            raise AdobeOutcomeUnknown(str(exc)) from exc
+        if current["process"] != state["process"]:
             raise AdobeOutcomeUnknown("App process identity changed during the command")
         if not isinstance(response, dict) or response.get("operation_id") != request["operation_id"]:
             raise AdobeOutcomeUnknown("Adobe receipt identity does not match the command")
@@ -433,6 +444,9 @@ class AdobeAuthoring:
                         "source_sha256": packet["source_sha256"], "retry_safe": False}
             if finalize:
                 response = finalize(response)
+            if "generative" in response:
+                packet.setdefault("generative_operations", []).append(
+                    {**response["generative"], "operation_id": operation_id})
             self._record(packet)
             shutil.rmtree(directory)
             pending.unlink()
@@ -467,7 +481,11 @@ class AdobeAuthoring:
     def _artifact(self, path):
         if not path.is_file() or path.stat().st_size == 0:
             raise AdobeOutcomeUnknown("Native output is missing or empty")
-        return {"path": str(path), "sha256": digest(path), "bytes": path.stat().st_size}
+        artifact = {"path": str(path), "sha256": digest(path), "bytes": path.stat().st_size}
+        resolved = path.resolve()
+        if resolved.is_relative_to(self.workspace):
+            artifact["relative_path"] = resolved.relative_to(self.workspace).as_posix()
+        return artifact
 
     @staticmethod
     def _remove_canvas_reservation(packet):
@@ -777,11 +795,10 @@ class AdobeAuthoring:
                               if kind == "png" else _svg(staged, native_export=True))
             os.link(staged, target)
             receipt = {**result, "artifact": {**self._artifact(target), **interpretation},
-                       "native_export_sha256": native_hash, "visual_acceptance": "unreviewed"}
-            with receipt_path.open("x") as stream:
-                json.dump(receipt, stream, indent=2)
-                stream.flush()
-                os.fsync(stream.fileno())
+                       "native_export_sha256": native_hash, "visual_acceptance": "unreviewed",
+                       "generative_operations": list(
+                           self._session(session_id).get("generative_operations", []))}
+            create_json(receipt_path, receipt)
             shutil.rmtree(directory)
             return {**receipt, "receipt": self._artifact(receipt_path)}
 
@@ -855,7 +872,17 @@ class AdobeAuthoring:
                 raise ValueError("bounds must be x,y,width,height")
             for index, value in enumerate(bounds):
                 _number(value, "bounds", 0 if index < 2 else 1, 30000)
-        return self._owned_action(session_id, "generative_fill", {"prompt": prompt, "bounds": bounds})
+        return self._owned_action(session_id, "generative_fill", {"prompt": prompt, "bounds": bounds},
+                                  self._generative("adobe_generative_fill", prompt, bounds))
+
+    @staticmethod
+    def _generative(tool, prompt, bounds):
+        def finalize(response):
+            layers = response["document"].get("changed_layers", [])
+            return {**response, "generative": {
+                "tool": tool, "service": "Adobe Firefly in Photoshop",
+                "prompt": prompt, "bounds": bounds, "layers": layers}}
+        return finalize
 
     def remove_background(self, session_id, layer_path, expected_name):
         """Mask everything except the detected subject on one exact pixel layer."""
@@ -867,7 +894,8 @@ class AdobeAuthoring:
     def generative_upscale(self, session_id):
         """Double the pixel dimensions and add the upscaled image as a new top layer."""
         self._photoshop_only("Generative Upscale")
-        return self._owned_action(session_id, "generative_upscale", {})
+        return self._owned_action(session_id, "generative_upscale", {},
+                                  self._generative("adobe_generative_upscale", None, None))
 
     def close_copy(self, session_id: str):
         """Close only this session's retained native document reference, without saving."""
