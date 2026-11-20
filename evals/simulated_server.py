@@ -12,13 +12,16 @@ from unittest.mock import patch
 
 import cavi_adobe_mcp.animate.bridge
 import cavi_adobe_mcp.animate.server
-import cavi_adobe_mcp.authoring.bridge
-import cavi_adobe_mcp.authoring.server
+import cavi_adobe_mcp.core.extendscript
 import cavi_adobe_mcp.dimension.bridge
 import cavi_adobe_mcp.dimension.server
+import cavi_adobe_mcp.illustrator.bridge
+import cavi_adobe_mcp.illustrator.server
+import cavi_adobe_mcp.photoshop.bridge
+import cavi_adobe_mcp.photoshop.server
 
 
-class SimulatedAdobe(cavi_adobe_mcp.authoring.bridge.AdobeAuthoring):
+class SimulatedTransport:
     def status(self):
         return {"app": self.app, "application": "/simulated/Adobe.app", "version": "simulated",
                 "running": True, "process": {"pid": 123, "started": "simulated"},
@@ -31,9 +34,18 @@ class SimulatedAdobe(cavi_adobe_mcp.authoring.bridge.AdobeAuthoring):
 
     def _native(self, request, state, directory):
         if request["action"] != "inspect":
-            raise cavi_adobe_mcp.authoring.bridge.AdobeCommandRejected(
+            raise cavi_adobe_mcp.core.extendscript.AdobeCommandRejected(
                 "Unsupported simulated native operation")
         return {"documents": []}
+
+
+class SimulatedPhotoshop(SimulatedTransport, cavi_adobe_mcp.photoshop.bridge.PhotoshopAuthoring):
+    pass
+
+
+class SimulatedIllustrator(SimulatedTransport,
+                           cavi_adobe_mcp.illustrator.bridge.IllustratorAuthoring):
+    pass
 
 
 class SimulatedAnimate(cavi_adobe_mcp.animate.bridge.AnimateAuthoring):
@@ -68,14 +80,18 @@ class SimulatedDimensionBridge:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("server", choices=("authoring", "animate", "dimension"))
+    parser.add_argument("server", choices=("photoshop", "illustrator", "animate", "dimension"))
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="adobe-eval-simulated-") as directory:
         root = Path(directory)
-        if args.server == "authoring":
-            with patch.object(cavi_adobe_mcp.authoring.server, "app",
-                              side_effect=lambda app: SimulatedAdobe(root, app)):
-                cavi_adobe_mcp.authoring.server.main()
+        if args.server == "photoshop":
+            with patch.object(cavi_adobe_mcp.photoshop.server, "host",
+                              side_effect=lambda timeout=45: SimulatedPhotoshop(root, timeout=timeout)):
+                cavi_adobe_mcp.photoshop.server.main()
+        elif args.server == "illustrator":
+            with patch.object(cavi_adobe_mcp.illustrator.server, "host",
+                              side_effect=lambda: SimulatedIllustrator(root)):
+                cavi_adobe_mcp.illustrator.server.main()
         elif args.server == "animate":
             host = SimulatedAnimate(root)
             with patch.object(cavi_adobe_mcp.animate.server, "host", return_value=host):

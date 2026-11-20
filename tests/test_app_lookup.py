@@ -7,10 +7,13 @@ from unittest.mock import patch
 
 from cavi_mcp_core.contracts import OperationRejected
 
-from cavi_adobe_mcp import animate, authoring
+from cavi_adobe_mcp import animate
 from cavi_adobe_mcp.animate.bridge import AnimateAuthoring, AnimateRejected
-from cavi_adobe_mcp.authoring.bridge import AdobeAuthoring
+from cavi_adobe_mcp.core import extendscript
+from cavi_adobe_mcp.illustrator.bridge import IllustratorAuthoring
+from cavi_adobe_mcp.photoshop.bridge import PhotoshopAuthoring
 
+HOSTS = {"photoshop": PhotoshopAuthoring, "illustrator": IllustratorAuthoring}
 OVERRIDES = ("CAVI_PHOTOSHOP_APP", "CAVI_ILLUSTRATOR_APP", "CAVI_ANIMATE_APP")
 
 
@@ -38,14 +41,15 @@ class AppLookupTests(unittest.TestCase):
         return app
 
     def authoring_status(self, application):
-        with patch.object(authoring.bridge.sys, "platform", "darwin"):
-            return AdobeAuthoring(self.root / "workspace", application).status()
+        with patch.object(extendscript.sys, "platform", "darwin"):
+            return HOSTS[application](self.root / "workspace").status()
 
     def test_photoshop_and_illustrator_use_their_overrides(self):
         for application, env in (("photoshop", "CAVI_PHOTOSHOP_APP"),
                                  ("illustrator", "CAVI_ILLUSTRATOR_APP")):
             with self.subTest(application=application):
-                identifier = authoring.bridge.APPS[application][0]
+                self.assertEqual(HOSTS[application].APP_ENV, env)
+                identifier = HOSTS[application].BUNDLE_ID
                 app = self.app(f"Chosen {application}", identifier, "27.0")
                 os.environ[env] = str(app)
                 state = self.authoring_status(application)

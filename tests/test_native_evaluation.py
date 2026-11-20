@@ -50,7 +50,7 @@ class NativeResultTests(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             run = native.NativeRun(root, root, {})
             client = AsyncMock()
-            for tool in ("adobe_inspect", "animate_inspect", "animate_create_from_png", "dimension_launch",
+            for tool in ("photoshop_inspect", "illustrator_inspect", "animate_inspect", "animate_create_from_png", "dimension_launch",
                          "dimension_render_start", "capture", "project_save_copy"):
                 with self.subTest(tool=tool), self.assertRaisesRegex(RuntimeError, "background"):
                     await run.call(client, tool)

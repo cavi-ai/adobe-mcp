@@ -4,14 +4,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from cavi_adobe_mcp.authoring.bridge import AdobeAuthoring
+from cavi_adobe_mcp.photoshop.bridge import PhotoshopAuthoring
 
 
 class DrawingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.host = AdobeAuthoring(Path(self.temp.name), 'photoshop')
+        self.host = PhotoshopAuthoring(Path(self.temp.name))
         self.host._owned_action = Mock(return_value={})
         self.points = [{'anchor': [1, 2], 'left': [1, 2], 'right': [4, 5]},
                        {'anchor': [8, 9], 'left': [6, 7], 'right': [8, 9]}]

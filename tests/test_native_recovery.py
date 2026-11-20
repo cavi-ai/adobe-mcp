@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 
 from cavi_mcp_core.journal import fingerprint
-from test_adobe_authoring import ContractBridge
+from owned_copy_fixtures import ContractBridge
 
-from cavi_adobe_mcp.authoring.bridge import AdobeOutcomeUnknown, _native_snapshot
+from cavi_adobe_mcp.core.extendscript import AdobeOutcomeUnknown, _native_snapshot
 
 
 class RecoveryBridge(ContractBridge):

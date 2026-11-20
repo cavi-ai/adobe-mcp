@@ -1,4 +1,4 @@
-"""Bounded Photoshop and Illustrator authoring on new, cooperatively owned copies.
+"""Owned-copy host shared by the Photoshop and Illustrator servers.
 
 The public methods accept data, never caller-supplied JavaScript. Native commands
 run only in an already running app; this module never launches or signs into one.
@@ -19,7 +19,6 @@ import uuid
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Literal
 
 from cavi_mcp_core import apps, proc
 from cavi_mcp_core.contracts import OperationRejected, OperationUnknown
@@ -29,15 +28,7 @@ from cavi_mcp_core.journal import write_json as _write_json
 from cavi_mcp_core.lock import FileLock
 from cavi_mcp_core.media import digest
 
-App = Literal["photoshop", "illustrator"]
-# app: (bundle identifier, /Applications glob, document suffix, override, name)
-APPS = {
-    "photoshop": ("com.adobe.Photoshop", "Adobe Photoshop*/*.app", ".psd", "CAVI_PHOTOSHOP_APP",
-                  "Adobe Photoshop"),
-    "illustrator": ("com.adobe.illustrator", "Adobe Illustrator*/*.app", ".ai",
-                    "CAVI_ILLUSTRATOR_APP", "Adobe Illustrator"),
-}
-DRIVER = Path(__file__).with_name("driver.jsx")
+PRELUDE = Path(__file__).with_name("extendscript.jsx")
 SESSION = re.compile(r"^[0-9a-f]{32}$")
 SNAPSHOT_FIELDS = ("name", "path", "native_id", "identity", "saved", "width", "height",
                    "units", "color_profile", "color_space", "bit_depth", "layers", "paths")
@@ -152,51 +143,27 @@ def _png(path: Path, *, data=False, color_profile=None, inspect_only=False):
             "srgb": not data, "usage": "data" if data else "color"}
 
 
-def _svg(path, *, native_export=False):
-    import xml.etree.ElementTree as ET
-    raw = path.read_bytes()
-    # Native exports can include a public DTD; remove it without fetching external resources.
-    if b"<!ENTITY" in raw.upper() or re.search(br"<!DOCTYPE[^>]*\[", raw, re.IGNORECASE):
-        raise AdobeOutcomeUnknown("SVG contains an entity declaration")
-    if b"<?xml-stylesheet" in raw.lower():
-        raise AdobeOutcomeUnknown("SVG has an external stylesheet instruction")
-    if re.search(br"<!DOCTYPE", raw, re.IGNORECASE):
-        if not native_export:
-            raise AdobeOutcomeUnknown("SVG source must not contain an external document type")
-        raw = re.sub(br"<!DOCTYPE[^>]*>", b"", raw, flags=re.IGNORECASE)
-    try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as exc:
-        raise AdobeOutcomeUnknown("Native export is not valid SVG") from exc
-    if root.tag.rsplit("}", 1)[-1] != "svg":
-        raise AdobeOutcomeUnknown("Native export is not SVG")
-    for element in root.iter():
-        if element.tag.rsplit("}", 1)[-1] in ("script", "foreignObject"):
-            raise AdobeOutcomeUnknown("SVG contains executable or external document content")
-        for key, value in element.attrib.items():
-            local = key.rsplit("}", 1)[-1]
-            if local.lower().startswith("on"):
-                raise AdobeOutcomeUnknown("SVG has an event handler")
-            if local == "href" and not value.startswith(("#", "data:")):
-                raise AdobeOutcomeUnknown("SVG has an external dependency")
-    if b"@import" in raw.lower():
-        raise AdobeOutcomeUnknown("SVG has an external CSS dependency")
-    for dependency in re.findall(br"url\(([^)]*)\)", raw, re.IGNORECASE):
-        if not dependency.strip().strip(b"\"'").startswith((b"#", b"data:")):
-            raise AdobeOutcomeUnknown("SVG has an external CSS dependency")
-    if native_export:
-        path.write_bytes(raw)
-    return {"usage": "color", "srgb": True, "self_contained": True}
+class OwnedCopyHost:
+    """Owned-copy journal, native transport and receipts for one Adobe application.
 
+    Subclasses name their application, the files they accept and the JSX driver that
+    holds their DOM calls, and add the operations only that application supports.
+    """
 
-class AdobeAuthoring:
-    def __init__(self, workspace, app: App, *, timeout=45, app_path=None):
-        if app not in APPS:
-            raise ValueError("app must be photoshop or illustrator")
+    app: str
+    BUNDLE_ID: str
+    APP_PATTERN: str
+    APP_ENV: str
+    APP_NAME: str
+    SUFFIX: str
+    SOURCES: frozenset
+    DRIVER: Path
+    INITIAL_ACTIONS = ("open_copy",)
+
+    def __init__(self, workspace, *, timeout=45, app_path=None):
         self.workspace = Path(workspace).resolve(strict=True)
         if not self.workspace.is_dir():
             raise ValueError("Workspace must be a directory")
-        self.app = app
         self.timeout = _number(timeout, "timeout", 1, 120)
         self.app_path = Path(app_path).resolve() if app_path else None
         self.store = self.workspace / ".adobe-authoring"
@@ -216,8 +183,8 @@ class AdobeAuthoring:
     def _application(self):
         if sys.platform != "darwin":
             raise AdobePreconditionFailed("Native Adobe authoring requires macOS")
-        identifier, pattern, _, env, name = APPS[self.app]
-        return apps.bundle(name, identifier, pattern, env, path=self.app_path)
+        return apps.bundle(self.APP_NAME, self.BUNDLE_ID, self.APP_PATTERN, self.APP_ENV,
+                           path=self.app_path)
 
     def status(self):
         """Inspect installation and process identity without sending Apple events or launching apps."""
@@ -274,26 +241,30 @@ class AdobeAuthoring:
                 or not SESSION.fullmatch(packet.get("ownership_token", ""))):
             raise ValueError("Session belongs to a different app or workspace")
         self._path(packet["source"], exists=True)
-        self._path(packet["copy"], suffix={APPS[self.app][2]}, exists=Path(packet["copy"]).exists())
+        self._path(packet["copy"], suffix={self.SUFFIX}, exists=Path(packet["copy"]).exists())
         self._path(packet["input_copy"], exists=True)
         for key in ("source_sha256", "copy_sha256"):
             if not re.fullmatch(r"[0-9a-f]{64}", packet[key]):
                 raise ValueError("Invalid session artifact digest")
         return packet
 
+    def _script(self, request):
+        """The fixed shared prelude and this application's driver around JSON-encoded data."""
+        return ('#targetengine "cavi_adobe_authoring"\nvar CAVI_REQUEST = '
+                + json.dumps(request, ensure_ascii=True, allow_nan=False)
+                + ";\n" + PRELUDE.read_text() + self.DRIVER.read_text())
+
     def _native(self, request, state, directory):
         """Transport only the fixed repository driver plus JSON-encoded data."""
         script = directory / f"{uuid.uuid4().hex}.jsx"
         request = {**request, "completion_path": str(directory / "completion.json")}
-        script_text = ('#targetengine "cavi_adobe_authoring"\nvar CAVI_REQUEST = '
-                       + json.dumps(request, ensure_ascii=True, allow_nan=False)
-                       + ";\n" + DRIVER.read_text())
+        script_text = self._script(request)
         script.write_text(script_text)
         # using terms only compiles against the installed dictionary. The running check does not launch.
         app_literal = json.dumps(state["application"])
         bridge = ("on run argv\nusing terms from application " + app_literal
-                  + "\nif not (application id \"" + APPS[self.app][0] + "\" is running) then "
-                  + 'error "Application stopped"\ntell application id "' + APPS[self.app][0]
+                  + "\nif not (application id \"" + self.BUNDLE_ID + "\" is running) then "
+                  + 'error "Application stopped"\ntell application id "' + self.BUNDLE_ID
                   + '" to do javascript (item 2 of argv)\nend using terms from\nend run')
         try:
             result = proc.run_sync(["/usr/bin/osascript", "-e", bridge, str(script), script_text],
@@ -384,11 +355,17 @@ class AdobeAuthoring:
         return {"session": {k: v for k, v in packet.items() if k not in ("ownership_token", "destination_reservation")},
                 "native": self._read("inspect_session", packet)}
 
+    def _verify(self, action, payload, result):
+        """Hook: raise AdobeOutcomeUnknown when a native result differs from the request."""
+
+    def _release_reservation(self, action, packet):
+        """Hook: undo a destination reservation after a native pre-mutation rejection."""
+
     def _mutate(self, packet, action, payload, pending, state, finalize=None):
         if pending.exists():
             raise AdobeOutcomeUnknown("An earlier Adobe command has no resolved outcome; inspect app and "
                                       + str(pending))
-        initial_action = action in ("open_copy", "create_canvas")
+        initial_action = action in self.INITIAL_ACTIONS
         if packet["state"] != "owned" and not initial_action:
             raise AdobeOutcomeUnknown("Session is not available for mutations; inspect it first")
         if packet["process"] != state["process"]:
@@ -416,22 +393,14 @@ class AdobeAuthoring:
                     "document_path": packet["copy"], "ownership_token": packet["ownership_token"],
                     "expected_document": packet.get("native_snapshot"),
                     "input_copy": packet.get("input_copy"),
-                    "destination_reservation": packet.get("destination_reservation"),
-                    **({"canvas_width": payload["canvas_width"],
-                       "canvas_height": payload["canvas_height"],
-                       "canvas_bit_depth": payload["canvas_bit_depth"]}
-                       if action == "create_canvas" else {})}, state, directory)
+                    "destination_reservation": packet.get("destination_reservation")},
+                    state, directory)
             except AdobeCommandRejected:
                 native_rejected = True
                 raise
             if digest(Path(packet["source"])) != packet["source_sha256"]:
                 raise AdobeOutcomeUnknown("Source changed during the command; inspect source and app")
-            if action == "create_canvas":
-                expected = {"width": payload["canvas_width"], "height": payload["canvas_height"],
-                            "color_space": "DocumentMode.RGB", "bit_depth": "BitsPerChannelType." + ("SIXTEEN" if payload["canvas_bit_depth"] == 16 else "EIGHT"),
-                            "color_profile": "sRGB IEC61966-2.1"}
-                if any(result.get(key) != value for key, value in expected.items()):
-                    raise AdobeOutcomeUnknown("Native canvas does not match the requested RGB sRGB dimensions; inspect app and copy")
+            self._verify(action, payload, result)
             packet["copy_sha256"] = digest(Path(packet["copy"]))
             if action == "close_copy":
                 packet.pop("native_snapshot", None)
@@ -454,9 +423,8 @@ class AdobeAuthoring:
         except BaseException as error:
             if native_rejected:
                 # Only the native driver's pre-mutation rejection permits this classification.
-                if action == "create_canvas":
-                    self._remove_canvas_reservation(packet)
-                packet["state"] = "rejected" if action in ("open_copy", "create_canvas") else "owned"
+                self._release_reservation(action, packet)
+                packet["state"] = "rejected" if initial_action else "owned"
                 packet["last_operation"] = {**record, "state": "rejected"}
                 self._record(packet)
                 pending.unlink()
@@ -487,45 +455,17 @@ class AdobeAuthoring:
             artifact["relative_path"] = resolved.relative_to(self.workspace).as_posix()
         return artifact
 
-    @staticmethod
-    def _remove_canvas_reservation(packet):
-        """Remove only the unchanged regular-file reservation created for this canvas."""
-        path = Path(packet["copy"])
-        try:
-            expected = packet["reservation_identity"]
-            before = path.lstat()
-            if (not stat.S_ISREG(before.st_mode)
-                    or {"device": before.st_dev, "inode": before.st_ino} != expected):
-                return
-            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-            try:
-                opened = os.fstat(descriptor)
-                if (not stat.S_ISREG(opened.st_mode)
-                        or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
-                    return
-                contents = os.read(descriptor, 128)
-            finally:
-                os.close(descriptor)
-            after = path.lstat()
-            if (contents != ("CAVI_ADOBE_RESERVED:" + packet["destination_reservation"]).encode()
-                    or not stat.S_ISREG(after.st_mode)
-                    or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)):
-                return
-            path.unlink()
-        except (OSError, KeyError, TypeError):
-            # Preservation is safer if the reservation cannot be proven unchanged.
-            return
+    def _check_source(self, path):
+        """Hook: validate an accepted source file before it is copied."""
 
     def open_copy(self, source: str, destination: str):
         """Open a private byte-for-byte source copy, then save a new PSD/AI, never the source.
 
         Unsaved changes in any already open source are deliberately not captured.
         """
-        allowed = {".psd", ".png"} if self.app == "photoshop" else {".ai", ".svg", ".png"}
-        source_path = self._path(source, suffix=allowed, exists=True)
-        if source_path.suffix.lower() == ".svg":
-            _svg(source_path)
-        target = self._path(destination, suffix={APPS[self.app][2]})
+        source_path = self._path(source, suffix=self.SOURCES, exists=True)
+        self._check_source(source_path)
+        target = self._path(destination, suffix={self.SUFFIX})
         if not target.parent.is_dir():
             raise ValueError("Copy destination directory must already exist")
         with self._locked() as pending:
@@ -550,72 +490,6 @@ class AdobeAuthoring:
                       "ownership_token": uuid.uuid4().hex, "destination_reservation": reservation}
             self._record(packet)
             return self._mutate(packet, "open_copy", {}, pending, state)
-
-    def create_canvas(self, width: int, height: int, destination: str, bit_depth: int = 16):
-        """Create a new transparent sRGB Photoshop canvas, defaulting to 16-bit samples."""
-        if self.app != "photoshop":
-            raise ValueError("Canvas creation is supported only in Photoshop")
-        if type(width) is not int or not 1 <= width <= 2880:
-            raise ValueError("width must be an integer in 1..2880")
-        if type(height) is not int or not 1 <= height <= 2880:
-            raise ValueError("height must be an integer in 1..2880")
-        if type(bit_depth) is not int or bit_depth not in (8, 16):
-            raise ValueError("bit_depth must be 8 or 16")
-        target = self._path(destination, suffix={".psd"})
-        if not target.parent.is_dir():
-            raise ValueError("Canvas destination directory must already exist")
-        recipe = {"version": 1, "kind": "photoshop_canvas_recipe", "width": width,
-                  "height": height, "resolution": 72, "mode": "RGB", "bit_depth": bit_depth,
-                  "background": "transparent", "color_profile": "sRGB IEC61966-2.1"}
-        with self._locked() as pending:
-            state = self._runtime()
-            if pending.exists():
-                raise AdobeOutcomeUnknown("Inspect the earlier pending Adobe command before creating a canvas")
-            self._store()
-            lineage = Path(tempfile.mkdtemp(prefix="canvas-recipe-", dir=self.store))
-            recipe_path = lineage / "canvas-recipe.json"
-            input_copy = lineage / "input" / "canvas-recipe.json"
-            input_copy.parent.mkdir(mode=0o700)
-            encoded = json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            with recipe_path.open("xb") as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            recipe_path.chmod(0o400)
-            with input_copy.open("xb") as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            input_copy.chmod(0o400)
-            source_hash = digest(recipe_path)
-            if digest(input_copy) != source_hash:
-                raise ValueError("Canvas recipe changed while staging its private input copy")
-            reservation = uuid.uuid4().hex
-            with target.open("x") as stream:
-                stream.write("CAVI_ADOBE_RESERVED:" + reservation)
-                stream.flush()
-                os.fsync(stream.fileno())
-            reservation_info = target.lstat()
-            packet = {"session_id": uuid.uuid4().hex, "app": self.app,
-                      "workspace": str(self.workspace), "source": str(recipe_path),
-                      "source_sha256": source_hash, "copy": str(target),
-                      "copy_sha256": source_hash, "input_copy": str(input_copy),
-                      "process": state["process"], "state": "created",
-                      "ownership_token": uuid.uuid4().hex,
-                      "destination_reservation": reservation,
-                      "reservation_identity": {"device": reservation_info.st_dev,
-                                               "inode": reservation_info.st_ino},
-                      "source_kind": "canvas_recipe"}
-            self._record(packet)
-
-            def receipt(response):
-                return {**response, "source_kind": "canvas_recipe",
-                        "source_sha256_kind": "canvas_recipe_json",
-                        "canvas_recipe": self._artifact(recipe_path)}
-
-            return self._mutate(packet, "create_canvas",
-                                {"canvas_width": width, "canvas_height": height, "canvas_bit_depth": bit_depth},
-                                pending, state, receipt)
 
     def _owned_action(self, session_id, action, payload, finalize=None):
         with self._locked() as pending:
@@ -708,16 +582,6 @@ class AdobeAuthoring:
     def edit_layers(self, session_id: str, edits: list[dict]):
         return self._owned_action(session_id, "edit_layers", {"edits": validate_edits(edits)})
 
-    def resize_image(self, session_id: str, width: int, height: int):
-        """Resample an owned Photoshop document while retaining its editable contents."""
-        if self.app != "photoshop":
-            raise ValueError("Image resizing is supported only in Photoshop")
-        for label, value in (("width", width), ("height", height)):
-            if type(value) is not int or not 1 <= value <= 2880:
-                raise ValueError(f"{label} must be an integer in 1..2880")
-        return self._owned_action(session_id, "resize_image", {
-            "resize_width": width, "resize_height": height})
-
     def add_rectangle(self, session_id: str, name: str, bounds: list, rgb: list,
                       opacity: float = 100):
         """Add a new filled motif/mask layer. Bounds are x,y,width,height in px (PS) or pt (AI)."""
@@ -735,7 +599,7 @@ class AdobeAuthoring:
             "name": name, "bounds": bounds, "rgb": rgb, "opacity": opacity})
 
     def add_group(self, session_id: str, name: str, *, parent_path=None, expected_parent_name=None):
-        """Add a Photoshop layer set or Illustrator sublayer, optionally inside an exact named group."""
+        """Add a named layer container, optionally inside an exact named group."""
         _name(name)
         group = self._group(parent_path, expected_parent_name)
         return self._owned_action(session_id, "add_group", {"name": name, **group})
@@ -772,14 +636,11 @@ class AdobeAuthoring:
                 raise AdobeOutcomeUnknown("Placement source changed during the command")
             return {**result, "placement_source": self._artifact(image)}
 
-    def export(self, session_id: str, destination: str, *, kind: Literal["png", "svg"] | None = None,
-               usage: Literal["color", "data"] = "color"):
-        if kind is None:
-            kind = "svg" if self.app == "illustrator" else "png"
-        if kind not in ("png", "svg") or usage not in ("color", "data"):
-            raise ValueError("Choose png/svg and color/data explicitly")
-        if kind == "svg" and (self.app != "illustrator" or usage != "color"):
-            raise ValueError("SVG export requires Illustrator and color usage")
+    def _interpret(self, kind, staged, usage, result):
+        """Check the staged native export and describe how its colors must be read."""
+        return _png(staged, data=usage == "data", color_profile=result["document"].get("export_profile"))
+
+    def _export(self, session_id, destination, kind, usage):
         target = self._path(destination, suffix={"." + kind})
         if not target.parent.is_dir():
             raise ValueError("Export destination directory must already exist")
@@ -790,9 +651,7 @@ class AdobeAuthoring:
 
         def publish(result):
             native_hash = digest(staged)
-            interpretation = (_png(staged, data=usage == "data",
-                                   color_profile=result["document"].get("export_profile"))
-                              if kind == "png" else _svg(staged, native_export=True))
+            interpretation = self._interpret(kind, staged, usage, result)
             os.link(staged, target)
             receipt = {**result, "artifact": {**self._artifact(target), **interpretation},
                        "native_export_sha256": native_hash, "visual_acceptance": "unreviewed",
@@ -857,46 +716,6 @@ class AdobeAuthoring:
         return self._owned_action(session_id, "apply_mask", {
             "layer_path": layer_path, "expected_name": expected_name, "path_name": path_name})
 
-    def _photoshop_only(self, feature):
-        if self.app != "photoshop":
-            raise ValueError(f"{feature} is supported only in Photoshop")
-
-    def generative_fill(self, session_id, prompt, bounds=None):
-        """Generate a new layer from a prompt inside bounds, or across the canvas without bounds."""
-        self._photoshop_only("Generative Fill")
-        if (not isinstance(prompt, str) or len(prompt) > 1000
-                or any(ord(c) < 32 for c in prompt)):
-            raise ValueError("prompt must contain 0..1000 printable characters")
-        if bounds is not None:
-            if not isinstance(bounds, list) or len(bounds) != 4:
-                raise ValueError("bounds must be x,y,width,height")
-            for index, value in enumerate(bounds):
-                _number(value, "bounds", 0 if index < 2 else 1, 30000)
-        return self._owned_action(session_id, "generative_fill", {"prompt": prompt, "bounds": bounds},
-                                  self._generative("adobe_generative_fill", prompt, bounds))
-
-    @staticmethod
-    def _generative(tool, prompt, bounds):
-        def finalize(response):
-            layers = response["document"].get("changed_layers", [])
-            return {**response, "generative": {
-                "tool": tool, "service": "Adobe Firefly in Photoshop",
-                "prompt": prompt, "bounds": bounds, "layers": layers}}
-        return finalize
-
-    def remove_background(self, session_id, layer_path, expected_name):
-        """Mask everything except the detected subject on one exact pixel layer."""
-        self._photoshop_only("Remove Background")
-        validate_edits([{"path": layer_path, "expected_name": expected_name, "visible": True}])
-        return self._owned_action(session_id, "remove_background", {
-            "layer_path": layer_path, "expected_name": expected_name})
-
-    def generative_upscale(self, session_id):
-        """Double the pixel dimensions and add the upscaled image as a new top layer."""
-        self._photoshop_only("Generative Upscale")
-        return self._owned_action(session_id, "generative_upscale", {},
-                                  self._generative("adobe_generative_upscale", None, None))
-
     def close_copy(self, session_id: str):
-        """Close only this session's retained native document reference, without saving."""
+        """Close only this session's retained native document reference; every earlier operation already saved."""
         return self._owned_action(session_id, "close_copy", {})

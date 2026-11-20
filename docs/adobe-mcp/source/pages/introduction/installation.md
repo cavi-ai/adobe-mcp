@@ -20,12 +20,13 @@ The servers never request a permission. A missing permission is reported and the
 uv tool install cavi-adobe-mcp
 ```
 
-The package installs three commands:
+The package installs four commands:
 
 | Command | Application |
 |---|---|
-| `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and review movies |
-| `cavi-animate-mcp` | Animate |
+| `cavi-photoshop-mcp` | Photoshop |
+| `cavi-illustrator-mcp` | Illustrator |
+| `cavi-animate-mcp` | Animate and review movies |
 | `cavi-dimension-mcp` | Dimension |
 
 ## Register a server
@@ -35,8 +36,12 @@ Add the servers you need to your MCP client and set the workspace:
 ```json
 {
   "mcpServers": {
-    "adobe-authoring": {
-      "command": "cavi-adobe-authoring-mcp",
+    "adobe-photoshop": {
+      "command": "cavi-photoshop-mcp",
+      "env": {"CAVI_ADOBE_WORKSPACE": "/Users/me/Art"}
+    },
+    "adobe-illustrator": {
+      "command": "cavi-illustrator-mcp",
       "env": {"CAVI_ADOBE_WORKSPACE": "/Users/me/Art"}
     },
     "adobe-animate": {

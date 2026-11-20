@@ -6,16 +6,20 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ### Added
 
-- `adobe_generative_fill` generates a new Photoshop layer from a prompt inside pixel bounds or across the canvas.
-- `adobe_remove_background` masks one Photoshop pixel layer to its detected subject.
-- `adobe_generative_upscale` doubles an owned PSD of at most 1440 px per side and adds the upscaled image as a new layer.
+- `photoshop_generative_fill` generates a new Photoshop layer from a prompt inside pixel bounds or across the canvas.
+- `photoshop_remove_background` masks one Photoshop pixel layer to its detected subject.
+- `photoshop_generative_upscale` doubles an owned PSD of at most 1440 px per side and adds the upscaled image as a new layer.
 
 ### Removed
 
 - The Character Animator server and its `cavi-character-animator-mcp` command, now in the `cavi-character-animator-mcp` package.
+- The `cavi-adobe-authoring-mcp` command, replaced by `cavi-photoshop-mcp` and `cavi-illustrator-mcp`.
+- The `application` parameter of the Photoshop and Illustrator tools.
 
 ### Changed
 
+- The `adobe_*` tools are now `photoshop_*` on the Photoshop server and `illustrator_*` on the Illustrator server; the Illustrator group tool is `illustrator_add_layer`.
+- `media_review_movie` is served by the Animate server.
 - Requires `cavi-mcp-core[media]` 0.1.8; the workspace root, path confinement, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.
 - A timed-out `osascript`, `open`, `swiftc` or native helper command is stopped with every process it started.
 - Tool results are built on the `cavi-mcp-core` `Result` model: an optional field the tool did not set is left out instead of sent as `null`.

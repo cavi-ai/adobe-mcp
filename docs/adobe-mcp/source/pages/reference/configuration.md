@@ -5,8 +5,8 @@ The servers are configured with environment variables, set in the `env` of each 
 | Variable | Used by | Meaning |
 |---|---|---|
 | `CAVI_ADOBE_WORKSPACE` | every server | Required. Absolute directory every tool path is relative to and must stay inside. |
-| `CAVI_PHOTOSHOP_APP` | authoring | The Photoshop `.app` to use. |
-| `CAVI_ILLUSTRATOR_APP` | authoring | The Illustrator `.app` to use. |
+| `CAVI_PHOTOSHOP_APP` | Photoshop | The Photoshop `.app` to use. |
+| `CAVI_ILLUSTRATOR_APP` | Illustrator | The Illustrator `.app` to use. |
 | `CAVI_ANIMATE_APP` | Animate | The Animate 2024 `.app` to use. |
 
 Without an override each server uses the newest installed version under `/Applications` with the application's
@@ -25,7 +25,7 @@ bundle identifier. An override is final: a path that names another application i
 
 | Setting | Value |
 |---|---|
-| Photoshop and Illustrator command time | 45 seconds; 120 seconds for the generative tools |
+| Photoshop and Illustrator command time | 45 seconds; 120 seconds for the Photoshop generative tools |
 | Animate command time | 60 seconds |
 | Dimension helper time | 30 seconds; 60 seconds to start a render |
 | Native helper compile time | 300 seconds |

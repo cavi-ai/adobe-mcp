@@ -16,7 +16,7 @@ Ask for outcomes in your own words:
 - “Build an Animate timeline from this artwork, then export its frames.”
 - “Export the Animate frames and make a review movie.”
 
-Three local servers cover different jobs: Photoshop and Illustrator authoring and review movies; Animate timeline authoring; and Dimension inspection and rendering. Their capabilities differ by application.
+Four local servers cover different jobs: Photoshop authoring; Illustrator authoring; Animate timeline authoring and review movies; and Dimension inspection and rendering. Their capabilities differ by application.
 
 ## The Adobe suite
 
@@ -49,12 +49,13 @@ Each larger application has its own package. Install the ones you use.
 uv tool install cavi-adobe-mcp
 ```
 
-The package installs three commands:
+The package installs four commands:
 
 | Command | Application |
 |---|---|
-| `cavi-adobe-authoring-mcp` | Photoshop, Illustrator and review movies |
-| `cavi-animate-mcp` | Animate |
+| `cavi-photoshop-mcp` | Photoshop |
+| `cavi-illustrator-mcp` | Illustrator |
+| `cavi-animate-mcp` | Animate and review movies |
 | `cavi-dimension-mcp` | Dimension |
 
 Register the servers you need in your MCP client and set the workspace:
@@ -62,8 +63,12 @@ Register the servers you need in your MCP client and set the workspace:
 ```json
 {
   "mcpServers": {
-    "adobe-authoring": {
-      "command": "cavi-adobe-authoring-mcp",
+    "adobe-photoshop": {
+      "command": "cavi-photoshop-mcp",
+      "env": {"CAVI_ADOBE_WORKSPACE": "/Users/me/Art"}
+    },
+    "adobe-illustrator": {
+      "command": "cavi-illustrator-mcp",
       "env": {"CAVI_ADOBE_WORKSPACE": "/Users/me/Art"}
     }
   }
@@ -90,7 +95,7 @@ Ownership records live inside the workspace (`.adobe-authoring/`, `.animate-auth
 <details>
 <summary>Application reference</summary>
 
-Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. In Photoshop it also runs Generative Fill from a prompt, Remove Background and Generative Upscale; Generative Fill and Generative Upscale use the signed-in Creative Cloud account and spend generative credits, and Photoshop's one-time Generative Credits notice must be acknowledged in the application first. Animate supports editable timelines and frame export. Dimension supports inspection and rendering. FFmpeg can create review movies.
+Photoshop supports inspection, owned copies, canvas and layer edits, text, paths, masks and PNG export, and runs Generative Fill from a prompt, Remove Background and Generative Upscale; Generative Fill and Generative Upscale use the signed-in Creative Cloud account and spend generative credits, and Photoshop's one-time Generative Credits notice must be acknowledged in the application first. Illustrator supports inspection, owned copies, layer edits, text, paths, masks and SVG or PNG export. Animate supports editable timelines, frame export and review movies made with FFmpeg. Dimension supports inspection and rendering.
 
 Keep workspace ownership records private. Each native operation is recorded before it runs. If an operation reports an unknown outcome, inspect the application and outputs or reconcile the recorded operation before trying again.
 

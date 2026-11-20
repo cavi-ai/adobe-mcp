@@ -260,7 +260,8 @@ class AnimateProtocolTests(unittest.IsolatedAsyncioTestCase):
                 tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                 self.assertEqual(set(tools), {"animate_status", "animate_inspect", "animate_open_copy",
                                               "animate_create_from_png",
-                                              "animate_set_stage_size_from_source", "animate_export_frames", "animate_edit_timeline", "animate_close_copy", "animate_operation_control"})
+                                              "animate_set_stage_size_from_source", "animate_export_frames", "animate_edit_timeline", "animate_close_copy", "animate_operation_control",
+                                              "media_review_movie"})
                 for tool in tools.values():
                     self.assertTrue(tool.output_schema["required"], tool.name)
                 self.assertFalse((workspace / ".animate-authoring").exists())
