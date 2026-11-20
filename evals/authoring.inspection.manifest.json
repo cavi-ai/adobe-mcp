@@ -56,6 +56,49 @@
       }
     },
     {
+      "id": "generative-fill-rejects-bounds",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_generative_fill",
+      "arguments": {
+        "application": "photoshop",
+        "session_id": "unused",
+        "prompt": "sky",
+        "bounds": [0, 0, 10]
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "remove-background-rejects-layer-path",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_remove_background",
+      "arguments": {
+        "application": "photoshop",
+        "session_id": "unused",
+        "layer_path": [],
+        "expected_name": "Layer 1"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "generative-upscale-rejects-application",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "adobe_generative_upscale",
+      "arguments": {
+        "application": "illustrator",
+        "session_id": "unused"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
       "id": "read-sequence",
       "probe": "workflow",
       "access": "read_only",
