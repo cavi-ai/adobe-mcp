@@ -4,6 +4,12 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Added
+
+- `adobe_generative_fill` generates a new Photoshop layer from a prompt inside pixel bounds or across the canvas.
+- `adobe_remove_background` masks one Photoshop pixel layer to its detected subject.
+- `adobe_generative_upscale` doubles an owned PSD of at most 1440 px per side and adds the upscaled image as a new layer.
+
 ### Removed
 
 - The Character Animator server and its `cavi-character-animator-mcp` command, now in the `cavi-character-animator-mcp` package.

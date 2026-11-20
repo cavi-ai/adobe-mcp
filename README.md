@@ -88,7 +88,7 @@ keep them private.
 <details>
 <summary>Application reference</summary>
 
-Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. Animate supports editable timelines and frame export. Dimension supports inspection and rendering. FFmpeg can create review movies.
+Authoring supports inspection, owned copies, canvas and layer edits, text, paths, masks and export. In Photoshop it also runs Generative Fill from a prompt, Remove Background and Generative Upscale; Generative Fill and Generative Upscale use the signed-in Creative Cloud account and spend generative credits, and Photoshop's one-time Generative Credits notice must be acknowledged in the application first. Animate supports editable timelines and frame export. Dimension supports inspection and rendering. FFmpeg can create review movies.
 
 Keep workspace ownership records private. Each native operation is recorded before it runs. If an operation reports an unknown outcome, inspect the application and outputs or reconcile the recorded operation before trying again.
 

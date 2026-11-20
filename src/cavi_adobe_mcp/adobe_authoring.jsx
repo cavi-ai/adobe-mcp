@@ -116,6 +116,11 @@ var CAVI_RESPONSE = (function (r) {
         if (node.name !== expected) throw Error("Layer name changed; inspect the exact path again");
         return node;
     }
+    function userMask(layer) {
+        var ref = new ActionReference(); ref.putIdentifier(charIDToTypeID("Lyr "), layer.id);
+        var desc = executeActionGet(ref);
+        return desc.hasKey(stringIDToTypeID("hasUserMask")) && desc.getBoolean(stringIDToTypeID("hasUserMask"));
+    }
     function layerIdentity(d, target) {
         function find(parent, prefix) {
             for (var n = 0; n < parent.layers.length; n++) {
@@ -394,6 +399,27 @@ var CAVI_RESPONSE = (function (r) {
                         if (layerDesc.hasKey(stringIDToTypeID("hasUserMask")) && layerDesc.getBoolean(stringIDToTypeID("hasUserMask")))
                             throw Error("Layer already has a mask");
                     } else if (item.pageItems.length === 0) throw Error("Clip layer contains no artwork");
+                } else if (r.action === "generative_fill" || r.action === "remove_background"
+                        || r.action === "generative_upscale") {
+                    if (!ps) throw Error("This operation is supported only in Photoshop");
+                    rgbDocument(d);
+                    var docWidth = d.width.as("px"), docHeight = d.height.as("px");
+                    if (r.action === "generative_fill") {
+                        if (typeof r.prompt !== "string" || r.prompt.length > 1000)
+                            throw Error("Prompt must be at most 1000 characters");
+                        if (r.bounds && (r.bounds[0] + r.bounds[2] > docWidth || r.bounds[1] + r.bounds[3] > docHeight))
+                            throw Error("Fill bounds exceed document bounds");
+                    } else if (r.action === "generative_upscale") {
+                        if (docWidth > 1440 || docHeight > 1440)
+                            throw Error("Generative Upscale requires at most 1440 px per side");
+                    } else {
+                        item = layerAt(d, r.layer_path, r.expected_name);
+                        if (item.typename !== "ArtLayer" || item.isBackgroundLayer
+                                || (item.kind !== LayerKind.NORMAL && item.kind !== LayerKind.SMARTOBJECT))
+                            throw Error("Remove Background requires a pixel or smart object layer that is not the background");
+                        if (item.allLocked) throw Error("Target layer is locked");
+                        if (userMask(item)) throw Error("Layer already has a mask");
+                    }
                 } else throw Error("Unsupported typed operation");
                 changed = true;
                 app.activeDocument = d;
@@ -510,6 +536,42 @@ var CAVI_RESPONSE = (function (r) {
                         var clip = maskPath.duplicate(clipGroup, ElementPlacement.PLACEATBEGINNING);
                         clip.clipping = true; clipGroup.clipped = true;
                     }
+                } else if (r.action === "generative_fill") {
+                    var layerTotal = layers(d, [], {remaining: 2048}).length, fb = r.bounds;
+                    if (fb) d.selection.select([[fb[0], fb[1]], [fb[0] + fb[2], fb[1]],
+                                                [fb[0] + fb[2], fb[1] + fb[3]], [fb[0], fb[1] + fb[3]]]);
+                    else d.selection.selectAll();
+                    var fd = new ActionDescriptor(), fr = new ActionReference();
+                    fr.putEnumerated(stringIDToTypeID("document"), stringIDToTypeID("ordinal"), stringIDToTypeID("targetEnum"));
+                    fd.putReference(stringIDToTypeID("null"), fr);
+                    fd.putString(stringIDToTypeID("prompt"), r.prompt);
+                    fd.putString(stringIDToTypeID("serviceID"), "clio");
+                    fd.putEnumerated(stringIDToTypeID("mode"), stringIDToTypeID("syntheticFillMode"), stringIDToTypeID("inpaint"));
+                    executeAction(stringIDToTypeID("syntheticFill"), fd, DialogModes.NO);
+                    d.selection.deselect();
+                    if (layers(d, [], {remaining: 2048}).length !== layerTotal + 1)
+                        throw Error("Photoshop did not add a generated layer");
+                    item = d.activeLayer;
+                } else if (r.action === "remove_background") {
+                    d.activeLayer = item;
+                    executeAction(stringIDToTypeID("removeBackground"), new ActionDescriptor(), DialogModes.NO);
+                    if (!userMask(item)) throw Error("Photoshop did not add a subject mask");
+                } else if (r.action === "generative_upscale") {
+                    var openBefore = app.documents.length;
+                    executeAction(stringIDToTypeID("generativeUpscale"), new ActionDescriptor(), DialogModes.NO);
+                    if (app.documents.length !== openBefore + 1 || app.activeDocument == d)
+                        throw Error("Photoshop did not open an upscaled document");
+                    temporary = app.activeDocument;
+                    if (temporary.width.as("px") !== docWidth * 2 || temporary.height.as("px") !== docHeight * 2)
+                        throw Error("Upscaled document is not twice the source size");
+                    if (temporary.layers.length > 1) temporary.mergeVisibleLayers();
+                    app.activeDocument = d;
+                    d.resizeImage(new UnitValue(docWidth * 2, "px"), new UnitValue(docHeight * 2, "px"),
+                                  d.resolution, ResampleMethod.BICUBIC);
+                    app.activeDocument = temporary;
+                    item = temporary.layers[0].duplicate(d, ElementPlacement.PLACEATBEGINNING);
+                    temporary.close(SaveOptions.DONOTSAVECHANGES); temporary = null;
+                    app.activeDocument = d; item.name = "Generative Upscale";
                 }
                 saveOwned(d);
                 result = snapshot(d);
