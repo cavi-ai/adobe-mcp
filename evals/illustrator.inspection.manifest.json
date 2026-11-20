@@ -62,6 +62,22 @@
       }
     },
     {
+      "id": "set-text-font-rejects-frame-index",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "illustrator_set_text_font",
+      "arguments": {
+        "session_id": "unused",
+        "layer_path": [0],
+        "expected_name": "Layer 1",
+        "frame_index": -1,
+        "font": "ArialMT"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
       "id": "read-sequence",
       "probe": "workflow",
       "access": "read_only",

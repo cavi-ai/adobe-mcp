@@ -17,8 +17,8 @@ This walks one PNG in the workspace to an edited Photoshop copy and an exported 
    `[{"path": [0], "expected_name": "<name shown>", "name": "Hero"}]` renames layer `[0]` only if it still has that
    name. The result lists the touched layer in `changed_layers`.
 
-5. Add editable text. `photoshop_fonts` lists installed fonts. Pass one `postscript_name` to `photoshop_add_text` with
-   `name`, `text`, `position`, `size` and `rgb`.
+5. Add editable text. `photoshop_fonts` lists installed fonts; Adobe Fonts must already be activated in Creative Cloud.
+   Pass one `postscript_name` to `photoshop_add_text` with `name`, `text`, `position`, `size` and `rgb`.
 
 6. Export. `photoshop_export` with `session_id`, `destination` `out/hero.png`. Photoshop writes a PNG next to a
    `out/hero.png.receipt.json` file with the hashes of the export.

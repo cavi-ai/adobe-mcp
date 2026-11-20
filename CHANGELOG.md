@@ -9,6 +9,11 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 - `photoshop_generative_fill` generates a new Photoshop layer from a prompt inside pixel bounds or across the canvas.
 - `photoshop_remove_background` masks one Photoshop pixel layer to its detected subject.
 - `photoshop_generative_upscale` doubles an owned PSD of at most 1440 px per side and adds the upscaled image as a new layer.
+- `photoshop_text_fonts` lists the style runs of every text layer of an owned PSD and the PostScript fonts Photoshop cannot use.
+- `photoshop_set_text_font` sets the font of one Photoshop text layer and refuses a result that keeps another font.
+- `illustrator_set_text_font` sets the font of one text frame of an Illustrator layer and refuses a result that keeps another font.
+- `photoshop_fonts` reports each font's `source` (`adobe_fonts`, `system`, `local`, `application` or `unknown`) and `file`, the `font_list` it was read from, and takes an optional `family`.
+- `photoshop_add_text` and `illustrator_add_text` read the font back after creating the text and refuse a result that keeps another font.
 
 ### Removed
 

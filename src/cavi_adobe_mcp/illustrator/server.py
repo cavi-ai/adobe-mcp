@@ -7,7 +7,7 @@ from cavi_mcp_core.server import DESTRUCTIVE as MUTATE
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
 from cavi_mcp_core.server import Server
-from pydantic import Field
+from pydantic import Field, StrictInt
 
 from ..core.config import workspace
 from ..core.owned_tools import (
@@ -124,6 +124,16 @@ def illustrator_add_text(session_id: str, name: str, text: str, font: str,
                          position: list[float], size: float, rgb: list[float]) -> AdobeMutation:
     """Create an editable text frame using an exact font name from illustrator_fonts; size in points."""
     return invoke(host().add_text, session_id, name, text, font, position, size, rgb)
+
+
+@mcp.tool(annotations=MUTATE)
+def illustrator_set_text_font(session_id: str, layer_path: LayerPath, expected_name: str,
+                              frame_index: Annotated[StrictInt, Field(ge=0, le=10000)],
+                              font: str) -> AdobeMutation:
+    """Set the font of one text frame of an exact unlocked layer; frame_index is the zero-based index among the
+    layer's direct text frames. font is the exact name from illustrator_fonts. Refused when the font is unavailable
+    or the frame keeps another font."""
+    return invoke(host().set_text_font, session_id, layer_path, expected_name, frame_index, font)
 
 
 @mcp.tool(annotations=MUTATE)
