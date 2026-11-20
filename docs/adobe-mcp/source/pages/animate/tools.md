@@ -1,6 +1,6 @@
 # Animate tools
 
-The Animate server (`cavi-animate-mcp`) has 9 tools. It works on Adobe Animate 2024 (bundle identifier
+The Animate server (`cavi-animate-mcp`) has 10 tools. It works on Adobe Animate 2024 (bundle identifier
 `com.adobe.Adobe-Animate-2024.application`) and only on FLA copies it owns. Animate must already be open. A
 parameter marked `*` is required.
 
@@ -18,6 +18,7 @@ Accessibility access.
 | `animate_set_stage_size_from_source` | `session_id`* | Sets the stage to the pixel size of the session's source PNG (1 to 2880 each side). |
 | `animate_edit_timeline` | `session_id`*, `batch`* | Applies `batch.edits`. See [Timelines and frames](timelines-and-frames.md). |
 | `animate_export_frames` | `session_id`*, `directory`* | Exports every frame as a PNG with a media receipt. |
+| `media_review_movie` | `receipt`*, `directory`*, `codec` (`prores_alpha` or `h264_black`, default `prores_alpha`) | Makes a review movie from a media receipt with free local FFmpeg. Starts no Adobe application. See [Review movies](../guides/review-movies.md). |
 | `animate_close_copy` | `session_id`* | Saves and closes the owned copy. |
 | `animate_operation_control` | `session_id`*, `operation_id`*, `action`, `expected_copy_sha256`, `expected_native_sha256` | Recovery. `action` is `inspect` (default), `adopt_current`, `cancel_unsubmitted` or `abandon_after_exit`. |
 

@@ -11,12 +11,16 @@
       ]
     },
     {
-      "title": "Photoshop and Illustrator",
+      "title": "Photoshop",
       "pages": [
-        { "title": "Tools", "path": "photoshop-illustrator/tools.md" },
-        { "title": "Generative tools", "path": "photoshop-illustrator/generative.md" },
-        { "title": "Owned copies", "path": "photoshop-illustrator/owned-copies.md" },
-        { "title": "Exports and receipts", "path": "photoshop-illustrator/exports-and-receipts.md" }
+        { "title": "Tools", "path": "photoshop/tools.md" },
+        { "title": "Generative tools", "path": "photoshop/generative.md" }
+      ]
+    },
+    {
+      "title": "Illustrator",
+      "pages": [
+        { "title": "Tools", "path": "illustrator/tools.md" }
       ]
     },
     {
@@ -36,6 +40,8 @@
     {
       "title": "Guides",
       "pages": [
+        { "title": "Owned copies", "path": "guides/owned-copies.md" },
+        { "title": "Exports and receipts", "path": "guides/exports-and-receipts.md" },
         { "title": "Review movies", "path": "guides/review-movies.md" },
         { "title": "Handoffs", "path": "guides/handoffs.md" },
         { "title": "Recovery and unknown outcomes", "path": "guides/recovery.md" },

@@ -1,25 +1,24 @@
 # Exports and receipts
 
-`adobe_export` writes a file from an owned copy and a receipt beside it.
+`photoshop_export` and `illustrator_export` write a file from an owned copy and a receipt beside it.
 
 | Parameter | Meaning |
 |---|---|
-| `application`* | `photoshop` or `illustrator` |
 | `session_id`* | The owned copy |
-| `destination`* | A new path ending in `.png` or `.svg`, in an existing folder |
-| `kind` | `png` or `svg`. Default: `png` for Photoshop, `svg` for Illustrator. |
+| `destination`* | A new path in an existing folder. Photoshop: `.png`. Illustrator: `.png` or `.svg`. |
+| `kind` | Illustrator only: `png` or `svg`. Default `svg`. Photoshop always writes PNG and has no `kind`. |
 | `usage` | `color` (default) or `data` |
 
 ## What each combination does
 
-| Application | `kind` | `usage` | Behavior |
+| Tool | `kind` | `usage` | Behavior |
 |---|---|---|---|
-| Photoshop | `png` | `color` | The document must be 8 or 16 bit RGB with a profile. A duplicate is converted to sRGB and saved as a non-interlaced PNG. The document is not changed. |
-| Photoshop | `png` | `data` | RGB or grayscale, 8 or 16 bit. The duplicate is saved without a colour profile and the PNG's colour chunks are removed, so values are not reinterpreted. |
-| Illustrator | `svg` | `color` | One artboard, sRGB document, RGB. Text is outlined, raster images are embedded, and the SVG is checked to be self-contained. |
-| Illustrator | `png` | `color` or `data` | One artboard, RGB. PNG24 at 100 percent, with transparency. `color` also requires an sRGB document. |
+| `photoshop_export` | PNG | `color` | The document must be 8 or 16 bit RGB with a profile. A duplicate is converted to sRGB and saved as a non-interlaced PNG. The document is not changed. |
+| `photoshop_export` | PNG | `data` | RGB or grayscale, 8 or 16 bit. The duplicate is saved without a colour profile and the PNG's colour chunks are removed, so values are not reinterpreted. |
+| `illustrator_export` | `svg` | `color` | One artboard, sRGB document, RGB. Text is outlined, raster images are embedded, and the SVG is checked to be self-contained. |
+| `illustrator_export` | `png` | `color` or `data` | One artboard, RGB. PNG24 at 100 percent, with transparency. `color` also requires an sRGB document. |
 
-Photoshop SVG export, and SVG with `data`, are refused.
+SVG with `data` is refused.
 
 ## Checks on the file
 
@@ -49,4 +48,4 @@ The receipt file is `<destination>.receipt.json`, for example `out/hero.png.rece
 result, without the `receipt` field. It is created exclusively and is never overwritten.
 
 A pipeline that takes the export should read the receipt, check the `artifact.sha256` against the file and treat
-`visual_acceptance` as open. See [Handoffs](../guides/handoffs.md).
+`visual_acceptance` as open. See [Handoffs](handoffs.md).

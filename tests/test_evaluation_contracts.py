@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_arguments_are_rejected_at_the_mcp_boundary(self):
         cases = (
-            ("authoring", "adobe_status", {"application": "photoshop"}),
+            ("photoshop", "photoshop_status", {}),
+            ("illustrator", "illustrator_status", {}),
             ("animate", "animate_status", {}),
             ("dimension", "dimension_status", {}),
         )
@@ -37,9 +38,10 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejected_paths_leave_each_session_usable(self):
         cases = (
-            ("authoring", "adobe_open_copy", {"application": "photoshop", "source": "../input.psd",
-                                             "destination": "copy.psd"},
-             "adobe_status", {"application": "photoshop"}),
+            ("photoshop", "photoshop_open_copy", {"source": "../input.psd", "destination": "copy.psd"},
+             "photoshop_status", {}),
+            ("illustrator", "illustrator_open_copy", {"source": "../input.ai", "destination": "copy.ai"},
+             "illustrator_status", {}),
             ("animate", "animate_open_copy", {"source": "../input.fla", "destination": "copy.fla"},
              "animate_status", {}),
             ("dimension", "dimension_render_start", {"scene": "../input.dn", "directory": "render"},
@@ -65,19 +67,20 @@ class SimulatedProtocolTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(status.structured_content["launches_application"])
 
 
-GENERATIVE_TOOLS = ("adobe_generative_fill", "adobe_remove_background", "adobe_generative_upscale")
+GENERATIVE_TOOLS = ("photoshop_generative_fill", "photoshop_remove_background",
+                    "photoshop_generative_upscale")
 
 
 class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
     def manifest_probes(self):
-        manifest = json.loads((ROOT / "evals/authoring.inspection.manifest.json").read_text())
+        manifest = json.loads((ROOT / "evals/photoshop.inspection.manifest.json").read_text())
         return {probe["tool"]: probe for probe in manifest["probes"]
                 if probe.get("tool") in GENERATIVE_TOOLS}
 
     async def test_catalog_lists_generative_tools_within_the_discovery_budget(self):
-        budget = json.loads((ROOT / "evals/authoring.manifest.json").read_text())["probes"][0]
+        budget = json.loads((ROOT / "evals/photoshop.manifest.json").read_text())["probes"][0]
         parameters = StdioServerParameters(command=sys.executable, args=[
-            str(ROOT / "evals/simulated_server.py"), "authoring"])
+            str(ROOT / "evals/simulated_server.py"), "photoshop"])
         async with stdio_client(parameters) as (reader, writer), \
                 ClientSession(reader, writer) as client:
             await client.initialize()
@@ -87,9 +90,8 @@ class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(tool=name):
                 self.assertIn(name, tools)
                 self.assertFalse(tools[name].annotations.read_only_hint)
-                self.assertEqual(tools[name].input_schema["properties"]["application"]["const"],
-                                 "photoshop")
-        for name in ("adobe_generative_fill", "adobe_generative_upscale"):
+                self.assertNotIn("application", tools[name].input_schema["properties"])
+        for name in ("photoshop_generative_fill", "photoshop_generative_upscale"):
             with self.subTest(tool=name):
                 self.assertTrue(tools[name].annotations.open_world_hint)
                 self.assertTrue(tools[name].annotations.destructive_hint)
@@ -98,7 +100,7 @@ class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
         probes = self.manifest_probes()
         self.assertEqual(sorted(probes), sorted(GENERATIVE_TOOLS))
         parameters = StdioServerParameters(command=sys.executable, args=[
-            str(ROOT / "evals/simulated_server.py"), "authoring"])
+            str(ROOT / "evals/simulated_server.py"), "photoshop"])
         async with stdio_client(parameters) as (reader, writer), \
                 ClientSession(reader, writer) as client:
             await client.initialize()
@@ -110,16 +112,16 @@ class GenerativeToolContractTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(rejected.structured_content["error"]["code"],
                                      "INVALID_ARGUMENT")
                     self.assertEqual(rejected.structured_content["error"]["outcome"], "rejected")
-            status = await client.call_tool("adobe_status", {"application": "photoshop"})
+            status = await client.call_tool("photoshop_status", {})
             self.assertFalse(status.is_error)
 
     async def test_overlong_generative_fill_prompt_is_rejected(self):
         parameters = StdioServerParameters(command=sys.executable, args=[
-            str(ROOT / "evals/simulated_server.py"), "authoring"])
+            str(ROOT / "evals/simulated_server.py"), "photoshop"])
         async with stdio_client(parameters) as (reader, writer), \
                 ClientSession(reader, writer) as client:
             await client.initialize()
-            rejected = await client.call_tool("adobe_generative_fill", {
-                "application": "photoshop", "session_id": "unused", "prompt": "x" * 1001})
+            rejected = await client.call_tool("photoshop_generative_fill", {
+                "session_id": "unused", "prompt": "x" * 1001})
             self.assertTrue(rejected.is_error)
             self.assertEqual(rejected.structured_content["error"]["code"], "INVALID_ARGUMENT")

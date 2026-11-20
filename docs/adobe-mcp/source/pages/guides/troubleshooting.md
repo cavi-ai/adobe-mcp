@@ -37,12 +37,11 @@ call with `PROMPT_BLOCKED` or `AUTHENTICATION_BOUNDARY`.
 | `Session app process changed; ownership is no longer valid` | The application restarted. Open a new copy. |
 | `Destination already exists` / `Output must not already exist` | Outputs must be new paths. |
 | `Layer name changed; inspect the exact path again` | The layer at that path is not the one you named. Inspect and use the current `path` and `name`. |
-| `Exact PostScript font is unavailable; use fonts discovery` | Use a `postscript_name` from `adobe_fonts`. |
+| `Exact PostScript font is unavailable; use fonts discovery` | Use a `postscript_name` from `photoshop_fonts` or `illustrator_fonts`. |
 | `Rectangle exceeds document bounds` / `Fill bounds exceed document bounds` | Shrink `bounds` to the document. |
 | `Layer already has a mask` | One mask per layer. A generated layer already has one. |
 | `Remove Background requires a pixel or smart object layer that is not the background` | Pick another layer. |
-| `Generative Upscale requires at most 1440 px per side` | Resize first with `adobe_resize_image`. |
-| `... is supported only in Photoshop` | Canvas creation, resizing and the generative tools are Photoshop only. |
+| `Generative Upscale requires at most 1440 px per side` | Resize first with `photoshop_resize_image`. |
 | `Mask requires one exact closed path` | Name exactly one closed path. |
 
 ## The native helper

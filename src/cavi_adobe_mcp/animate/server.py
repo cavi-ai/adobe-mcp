@@ -5,19 +5,22 @@ from typing import Literal
 
 import anyio.to_thread
 from cavi_mcp_core.contracts import Result
+from cavi_mcp_core.media import MediaOutcomeUnknown
 from cavi_mcp_core.server import READ_ONLY as READ
 from cavi_mcp_core.server import WRITES as WRITE
 from cavi_mcp_core.server import Server
 from mcp.server.mcpserver.exceptions import ToolError
 
 from ..core.config import workspace
+from ..media import review_movie
 from . import bridge
 from .timeline import TimelineBatch
 
 mcp = Server("cavi-animate-authoring", package="cavi-adobe-mcp", anticipated=(), instructions=(
     "Inspect and author only workspace-owned Adobe Animate FLA copies. Animate must already be open. "
     "Commands use a fixed JSFL driver and typed data; native unknown outcomes block retries. "
-    "Server startup and status never launch Animate."
+    "Server startup and status never launch Animate. media_review_movie renders a review movie "
+    "with local FFmpeg from a frame receipt and does not use Animate."
 ))
 
 
@@ -47,7 +50,8 @@ async def invoke(function, *args, cancellable=False):
         return await anyio.to_thread.run_sync(
             lambda: function(*args, **({"cancelled": cancelled} if cancellable else {})),
             abandon_on_cancel=True)
-    except (OSError, ValueError, TypeError, KeyError, bridge.AnimateUnknown) as exc:
+    except (OSError, ValueError, TypeError, KeyError, bridge.AnimateUnknown,
+            MediaOutcomeUnknown) as exc:
         raise ToolError(str(exc)) from exc
     except BaseException:
         cancelled.set()
@@ -126,6 +130,23 @@ async def animate_operation_control(session_id: str, operation_id: str,
     """Inspect retained native completion and explicitly adopt observed copy hashes without replaying the command."""
     return await invoke(host().operation_control, action, session_id, operation_id,
                         expected_copy_sha256, expected_native_sha256, cancellable=True)
+
+
+class MovieExport(Result):
+    path: str
+    sha256: str
+    codec: Literal["prores_alpha", "h264_black"]
+    stream: dict
+    execution: dict
+    visual_acceptance: Literal["unreviewed"]
+    launches_applications: Literal[True]
+
+
+@mcp.tool(annotations=WRITE)
+async def media_review_movie(receipt: str, directory: str,
+                             codec: Literal["prores_alpha", "h264_black"] = "prores_alpha") -> MovieExport:
+    """Run free local FFmpeg/ffprobe on pinned frames; MOV retains alpha, MP4 explicitly composites black."""
+    return await invoke(review_movie.review_movie, workspace(), receipt, directory, codec)
 
 
 def main():

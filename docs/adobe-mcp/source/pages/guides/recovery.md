@@ -20,8 +20,8 @@ call and send it again.
 ## Photoshop and Illustrator
 
 1. Look at the application and at the output files. Clear any prompt by hand.
-2. `adobe_inspect` with the `application` shows `pending_operation`. A pending operation blocks every change.
-3. `adobe_operation_control` with the `session_id`, the `operation_id` and `action` `inspect` returns:
+2. `photoshop_inspect` or `illustrator_inspect` shows `pending_operation`. A pending operation blocks every change.
+3. `photoshop_operation_control` or `illustrator_operation_control` with the `session_id`, the `operation_id` and `action` `inspect` returns:
 
    | Field | Meaning |
    |---|---|
@@ -36,7 +36,7 @@ call and send it again.
 5. If the application has quit, `action` `abandon_after_exit` abandons the operation (`abandoned_after_process_exit`).
    It is refused while the original process is running.
 
-An unknown read (`adobe_inspect`) is cleared by a later successful inspect in the same process.
+An unknown read (`photoshop_inspect` or `illustrator_inspect`) is cleared by a later successful inspect in the same process.
 
 ## Animate
 

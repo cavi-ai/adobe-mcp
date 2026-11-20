@@ -58,8 +58,8 @@ class NativeRun:
 
     async def check_installed(self):
         for module, tools in (
-            ("authoring", (("adobe_status", {"application": "photoshop"}),
-                           ("adobe_status", {"application": "illustrator"}))),
+            ("photoshop", (("photoshop_status", {}),)),
+            ("illustrator", (("illustrator_status", {}),)),
             ("animate", (("animate_status", {}),)),
             ("dimension", (("dimension_status", {}),)),
         ):
@@ -82,7 +82,7 @@ class NativeRun:
             "alpha": "straight", "loop": False,
             "frames": [{"name": f"Frame{i}", "path": self.destination(f"frames/frame{i}.png")} for i in (0, 1)]})
         pinned = media.ingest(self.workspace, self.destination("frames/recipe.json"), self.destination("media"))
-        async with stdio_client(self.server("authoring")) as (reader, writer), \
+        async with stdio_client(self.server("animate")) as (reader, writer), \
                 ClientSession(reader, writer, read_timeout_seconds=330) as client:
             await client.initialize()
             movie = await self.call(client, "media_review_movie", {

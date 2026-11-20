@@ -12,17 +12,19 @@ uv run --locked python -m scripts.docs.build
 uv run --locked python -m scripts.docs.verify
 ```
 
-The tests drive the real authoring, Animate and Dimension code with a scripted native bridge and synthetic files. They
+The tests drive the real Photoshop, Illustrator, Animate and Dimension code with a scripted native bridge and synthetic files. They
 establish the servers' own rules, not Adobe's behavior. They cover:
 
 - Photoshop and Illustrator authoring: owned copies that leave the source unchanged, canvas recipes and depth,
   resizing, layer edits with expected names, groups, placement, rectangles, paths, text and masks, export hashes and
   receipts, refusal of paths that leave the workspace, unknown outcomes that block later changes, and changed sources,
   copies or processes;
-- the generative tools: `adobe_generative_fill` validates its prompt and bounds before dispatch and sends an empty
-  prompt with no bounds as a whole-canvas request; `adobe_remove_background` targets one exact layer path and name;
-  `adobe_generative_upscale` dispatches once for an owned copy; all three are refused for Illustrator before any native
-  request is sent, and each returns a `document` snapshot with `retry_safe` `false`;
+- the generative tools: `photoshop_generative_fill` validates its prompt and bounds before dispatch and sends an empty
+  prompt with no bounds as a whole-canvas request; `photoshop_remove_background` targets one exact layer path and name;
+  `photoshop_generative_upscale` dispatches once for an owned copy; each returns a `document` snapshot with
+  `retry_safe` `false`, and the Illustrator server has no generative tools;
+- the shared host: the Photoshop and Illustrator requests, session packets and receipts match recorded fixtures, and
+  the assembled scripts for both applications parse;
 - Animate: sessions, timeline edits, frame export and receipts, the recovery actions, and the native chooser handling;
 - Dimension: render submission, inspection, the RGBA handoff and the receipt;
 - media: the media receipt and the review movie;
@@ -44,7 +46,8 @@ to `.tmp/evals/<run>/`.
 
 | Server | Protocol manifest limits |
 |---|---|
-| Authoring | at most 20 tools and 24,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
+| Photoshop | at most 19 tools and 20,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
+| Illustrator | at most 14 tools and 15,000 schema bytes; at most 9,000 tokens in total and 3,000 per tool |
 | Animate | at most 10 tools and 12,000 schema bytes; at most 6,000 tokens in total and 3,000 per tool |
 | Dimension | at most 6 tools and 5,000 schema bytes; at most 3,000 tokens in total and per tool |
 

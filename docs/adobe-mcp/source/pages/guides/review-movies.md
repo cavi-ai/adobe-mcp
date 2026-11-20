@@ -1,7 +1,7 @@
 # Review movies
 
 `media_review_movie` turns a set of pinned frames into one movie for review. It runs the free local `ffmpeg` and
-`ffprobe` programs. It starts no Adobe application.
+`ffprobe` programs. It starts no Adobe application. It is served by the Animate server (`cavi-animate-mcp`).
 
 | Parameter | Meaning |
 |---|---|

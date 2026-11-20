@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "probes": [
+    {
+      "id": "status-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "photoshop_status",
+      "arguments": {}
+    },
+    {
+      "id": "status-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_status",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/running": true,
+          "/structuredContent/launches_application": false,
+          "/structuredContent/authenticates": false
+        }
+      }
+    },
+    {
+      "id": "inspect-schema",
+      "probe": "output-schema",
+      "access": "read_only",
+      "tool": "photoshop_inspect",
+      "arguments": {}
+    },
+    {
+      "id": "inspect-outcome",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_inspect",
+      "arguments": {},
+      "expect": {
+        "outcome": "ok",
+        "equals_paths": {
+          "/structuredContent/runtime/running": true,
+          "/structuredContent/pending_operation": null
+        },
+        "required_result_paths": [
+          "/structuredContent/documents"
+        ]
+      }
+    },
+    {
+      "id": "generative-fill-rejects-bounds",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_generative_fill",
+      "arguments": {
+        "session_id": "unused",
+        "prompt": "sky",
+        "bounds": [0, 0, 10]
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "remove-background-rejects-layer-path",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_remove_background",
+      "arguments": {
+        "session_id": "unused",
+        "layer_path": [],
+        "expected_name": "Layer 1"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "generative-upscale-rejects-application-argument",
+      "probe": "instruction-fidelity",
+      "access": "read_only",
+      "tool": "photoshop_generative_upscale",
+      "arguments": {
+        "application": "photoshop",
+        "session_id": "unused"
+      },
+      "expect": {
+        "outcome": "error"
+      }
+    },
+    {
+      "id": "read-sequence",
+      "probe": "workflow",
+      "access": "read_only",
+      "repetitions": 3,
+      "steps": [
+        {
+          "tool": "photoshop_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false,
+              "/structuredContent/authenticates": false
+            }
+          }
+        },
+        {
+          "tool": "photoshop_inspect",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/runtime/running": true,
+              "/structuredContent/pending_operation": null
+            },
+            "required_result_paths": [
+              "/structuredContent/documents"
+            ]
+          }
+        },
+        {
+          "tool": "photoshop_status",
+          "arguments": {},
+          "expect": {
+            "outcome": "ok",
+            "equals_paths": {
+              "/structuredContent/running": true,
+              "/structuredContent/launches_application": false,
+              "/structuredContent/authenticates": false
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

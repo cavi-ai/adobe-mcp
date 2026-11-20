@@ -15,17 +15,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from PIL import Image
 
-from cavi_adobe_mcp.authoring import server
 from cavi_adobe_mcp.media import frames as media
 from cavi_adobe_mcp.media import review_movie
+from cavi_adobe_mcp.photoshop import server
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTHORING_TOOLS = {
-    "adobe_status", "adobe_inspect", "adobe_open_copy", "adobe_create_canvas", "adobe_resize_image", "adobe_edit_layers",
-    "adobe_add_group", "adobe_place_image", "adobe_add_rectangle", "adobe_add_path", "adobe_add_text",
-    "adobe_apply_mask", "adobe_generative_fill", "adobe_remove_background", "adobe_generative_upscale", "adobe_fonts", "adobe_export", "adobe_close_copy", "adobe_operation_control",
-    "media_review_movie",
-}
 
 
 def fixture(root):
@@ -107,9 +101,9 @@ class MediaTests(unittest.TestCase):
 
     def test_owned_adobe_inspection_matches_output_contract(self):
         snapshot = {"runtime": {"running": True}, "pending_operation": None, "version": "test"}
-        with patch.object(server, "app") as host:
+        with patch.object(server, "host") as host:
             host.return_value.inspect_session.return_value = {"session": {"session_id": "test"}, "native": snapshot}
-            result = server.adobe_inspect("photoshop", "test")
+            result = server.photoshop_inspect("test")
         parsed = server.AdobeSnapshot.model_validate(result)
         self.assertEqual(parsed.runtime, snapshot["runtime"])
         self.assertEqual(result["session"], {"session_id": "test"})
@@ -155,13 +149,29 @@ class MediaProtocolTests(unittest.IsolatedAsyncioTestCase):
             fixture(root)
             env = {**os.environ, "CAVI_ADOBE_WORKSPACE": str(root)}
             params = StdioServerParameters(command=sys.executable,
-                args=["-m", "cavi_adobe_mcp.authoring.server"], env=env)
+                args=["-m", "cavi_adobe_mcp.animate.server"], env=env)
             async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
                 await client.initialize()
                 catalog = {x.name: x for x in (await client.list_tools()).tools}
-                self.assertEqual(set(catalog), AUTHORING_TOOLS)
+                self.assertIn("media_review_movie", catalog)
                 for tool in catalog.values():
                     self.assertTrue(tool.output_schema["required"], tool.name)
-                bad = await client.call_tool("adobe_open_copy", {"application": "unknown", "source": "x", "destination": "y"})
+                bad = await client.call_tool("media_review_movie", {
+                    "receipt": "x", "directory": "y", "codec": "unknown"})
+                self.assertTrue(bad.is_error)
+                self.assertEqual(bad.structured_content["error"]["outcome"], "rejected")
+                missing = await client.call_tool("media_review_movie", {
+                    "receipt": "missing/receipt.json", "directory": "movie"})
+                self.assertTrue(missing.is_error)
+                self.assertEqual(missing.structured_content["error"]["outcome"], "rejected")
+                self.assertFalse((root / "movie").exists())
+            params = StdioServerParameters(command=sys.executable,
+                args=["-m", "cavi_adobe_mcp.photoshop.server"], env=env)
+            async with stdio_client(params) as (r, w), ClientSession(r, w) as client:
+                await client.initialize()
+                catalog = {x.name: x for x in (await client.list_tools()).tools}
+                self.assertNotIn("media_review_movie", catalog)
+                bad = await client.call_tool("photoshop_open_copy", {
+                    "application": "unknown", "source": "x", "destination": "y"})
                 self.assertTrue(bad.is_error)
                 self.assertEqual(bad.structured_content["error"]["outcome"], "rejected")

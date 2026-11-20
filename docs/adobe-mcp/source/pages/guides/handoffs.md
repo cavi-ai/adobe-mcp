@@ -18,19 +18,19 @@ Every tool that changes a document returns:
 | `source_sha256` | The hash of the source file (or canvas recipe) the copy came from. |
 | `retry_safe` | Always `false`. |
 
-To pick up where a call stopped, call `adobe_inspect` with the `session_id`. It returns the current snapshot and the
+To pick up where a call stopped, call `photoshop_inspect` or `illustrator_inspect` with the `session_id`. It returns the current snapshot and the
 stored session record.
 
 ### Finding the new layer
 
 Layer paths shift when layers are added, so find a layer by `changed_layers`, not by guessing its index. After the
-generative tools:
+Photoshop generative tools:
 
-- `adobe_generative_fill` puts the generated layer in `changed_layers`. Pass its `path` and `name` as
+- `photoshop_generative_fill` puts the generated layer in `changed_layers`. Pass its `path` and `name` as
   `layer_path` and `expected_name` to later edits. A generated layer already has its own mask, so
-  `adobe_remove_background` rejects it.
-- `adobe_remove_background` lists the masked layer. Its `has_user_mask` is then `true` in the snapshot.
-- `adobe_generative_upscale` lists the new top layer named `Generative Upscale`. The document is now twice its
+  `photoshop_remove_background` rejects it.
+- `photoshop_remove_background` lists the masked layer. Its `has_user_mask` is then `true` in the snapshot.
+- `photoshop_generative_upscale` lists the new top layer named `Generative Upscale`. The document is now twice its
   earlier width and height; read the new size from `document.width` and `document.height`.
 
 `native_id` is Photoshop's own layer id, also shown on each layer in the snapshot as `id`. Illustrator reports
@@ -38,11 +38,11 @@ generative tools:
 
 ### Exports
 
-`adobe_export` writes the file and `<destination>.receipt.json`. A pipeline takes the receipt, reads
+`photoshop_export` and `illustrator_export` write the file and `<destination>.receipt.json`. A pipeline takes the receipt, reads
 `artifact.path` and `artifact.sha256`, hashes the file itself and continues only if they match. `usage` `color`
 gives an sRGB image; `data` gives values with no colour interpretation, for maps and masks. `native_export_sha256`
 is the hash of what the application wrote before the server adjusted colour chunks. See [Exports and
-receipts](../photoshop-illustrator/exports-and-receipts.md).
+receipts](exports-and-receipts.md).
 
 The PSD or AI copy itself is a handoff too: its `copy.sha256` pins it, and the layers stay editable.
 

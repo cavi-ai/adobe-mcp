@@ -1,0 +1,292 @@
+{
+ "requests": [
+  {
+   "action": "open_copy",
+   "app": "illustrator",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.ai",
+   "ownership_token": "<hex32>",
+   "expected_document": null,
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.svg",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "name": "Head",
+   "group_path": null,
+   "expected_group_name": null,
+   "action": "add_group",
+   "app": "illustrator",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.ai",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.ai",
+    "path": "<root>/working.ai",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.svg",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "name": "Box",
+   "bounds": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "rgb": [
+    1,
+    2,
+    3
+   ],
+   "opacity": 100,
+   "action": "add_rectangle",
+   "app": "illustrator",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.ai",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.ai",
+    "path": "<root>/working.ai",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.svg",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "destination": "<root>/.cavi-adobe-export-<id>/export.svg",
+   "kind": "svg",
+   "usage": "color",
+   "action": "export",
+   "app": "illustrator",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.ai",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.ai",
+    "path": "<root>/working.ai",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.svg",
+   "destination_reservation": "<hex32>"
+  }
+ ],
+ "open_result": {
+  "session_id": "<hex32>",
+  "operation_id": "<hex32>",
+  "document": {
+   "name": "working.ai",
+   "path": "<root>/working.ai",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "export_profile": "sRGB IEC61966-2.1",
+   "layers": [],
+   "paths": []
+  },
+  "copy": {
+   "path": "<root>/working.ai",
+   "sha256": "<sha256>",
+   "bytes": 95,
+   "relative_path": "working.ai"
+  },
+  "source_sha256": "<sha256>",
+  "retry_safe": false
+ },
+ "export_result": {
+  "session_id": "<hex32>",
+  "operation_id": "<hex32>",
+  "document": {
+   "name": "working.ai",
+   "path": "<root>/working.ai",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "export_profile": "sRGB IEC61966-2.1",
+   "layers": [],
+   "paths": []
+  },
+  "copy": {
+   "path": "<root>/working.ai",
+   "sha256": "<sha256>",
+   "bytes": 95,
+   "relative_path": "working.ai"
+  },
+  "source_sha256": "<sha256>",
+  "retry_safe": false,
+  "artifact": {
+   "path": "<root>/out.svg",
+   "sha256": "<sha256>",
+   "bytes": 95,
+   "relative_path": "out.svg",
+   "usage": "color",
+   "srgb": true,
+   "self_contained": true
+  },
+  "native_export_sha256": "<sha256>",
+  "visual_acceptance": "unreviewed",
+  "generative_operations": [],
+  "receipt": {
+   "path": "<root>/out.svg.receipt.json",
+   "sha256": "<sha256>",
+   "bytes": 1253,
+   "relative_path": "out.svg.receipt.json"
+  }
+ },
+ "packet": {
+  "session_id": "<hex32>",
+  "app": "illustrator",
+  "workspace": "<root>",
+  "source": "<root>/source.svg",
+  "source_sha256": "<sha256>",
+  "copy": "<root>/working.ai",
+  "copy_sha256": "<sha256>",
+  "input_copy": "<root>/.adobe-authoring/source-<id>/source.svg",
+  "process": {
+   "pid": 123,
+   "started": "fixture"
+  },
+  "state": "owned",
+  "ownership_token": "<hex32>",
+  "destination_reservation": "<hex32>",
+  "last_operation": {
+   "operation_id": "<hex32>",
+   "action": "export",
+   "session_id": "<hex32>",
+   "workspace": "<root>",
+   "process": {
+    "pid": 123,
+    "started": "fixture"
+   },
+   "state": "observed",
+   "diagnostics": "<tmp>/cavi-adobe-command-<id>",
+   "result": {
+    "name": "working.ai",
+    "path": "<root>/working.ai",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "export_profile": "sRGB IEC61966-2.1",
+    "layers": [],
+    "paths": []
+   }
+  },
+  "native_snapshot": {
+   "name": "working.ai",
+   "path": "<root>/working.ai",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "layers": [],
+   "paths": []
+  }
+ },
+ "receipt_file": {
+  "artifact": {
+   "bytes": 95,
+   "path": "<root>/out.svg",
+   "relative_path": "out.svg",
+   "self_contained": true,
+   "sha256": "<sha256>",
+   "srgb": true,
+   "usage": "color"
+  },
+  "copy": {
+   "bytes": 95,
+   "path": "<root>/working.ai",
+   "relative_path": "working.ai",
+   "sha256": "<sha256>"
+  },
+  "document": {
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "export_profile": "sRGB IEC61966-2.1",
+   "height": 1,
+   "identity": "document_id_and_retained_reference",
+   "layers": [],
+   "name": "working.ai",
+   "native_id": 42,
+   "path": "<root>/working.ai",
+   "paths": [],
+   "saved": true,
+   "units": "pixels",
+   "width": 1
+  },
+  "generative_operations": [],
+  "native_export_sha256": "<sha256>",
+  "operation_id": "<hex32>",
+  "retry_safe": false,
+  "session_id": "<hex32>",
+  "source_sha256": "<sha256>",
+  "visual_acceptance": "unreviewed"
+ },
+ "close_state": "closed",
+ "close_result_keys": [
+  "session_id",
+  "operation_id",
+  "document",
+  "copy",
+  "source_sha256",
+  "retry_safe"
+ ]
+}

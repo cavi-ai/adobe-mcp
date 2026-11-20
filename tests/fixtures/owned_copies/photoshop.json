@@ -1,0 +1,298 @@
+{
+ "requests": [
+  {
+   "action": "open_copy",
+   "app": "photoshop",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.psd",
+   "ownership_token": "<hex32>",
+   "expected_document": null,
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.png",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "name": "Head",
+   "group_path": null,
+   "expected_group_name": null,
+   "action": "add_group",
+   "app": "photoshop",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.psd",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.psd",
+    "path": "<root>/working.psd",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.png",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "name": "Box",
+   "bounds": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "rgb": [
+    1,
+    2,
+    3
+   ],
+   "opacity": 100,
+   "action": "add_rectangle",
+   "app": "photoshop",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.psd",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.psd",
+    "path": "<root>/working.psd",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.png",
+   "destination_reservation": "<hex32>"
+  },
+  {
+   "destination": "<root>/.cavi-adobe-export-<id>/export.png",
+   "kind": "png",
+   "usage": "color",
+   "action": "export",
+   "app": "photoshop",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/working.psd",
+   "ownership_token": "<hex32>",
+   "expected_document": {
+    "name": "working.psd",
+    "path": "<root>/working.psd",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "layers": [],
+    "paths": []
+   },
+   "input_copy": "<root>/.adobe-authoring/source-<id>/source.png",
+   "destination_reservation": "<hex32>"
+  }
+ ],
+ "open_result": {
+  "session_id": "<hex32>",
+  "operation_id": "<hex32>",
+  "document": {
+   "name": "working.psd",
+   "path": "<root>/working.psd",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "export_profile": "sRGB IEC61966-2.1",
+   "layers": [],
+   "paths": []
+  },
+  "copy": {
+   "path": "<root>/working.psd",
+   "sha256": "<sha256>",
+   "bytes": 83,
+   "relative_path": "working.psd"
+  },
+  "source_sha256": "<sha256>",
+  "retry_safe": false
+ },
+ "export_result": {
+  "session_id": "<hex32>",
+  "operation_id": "<hex32>",
+  "document": {
+   "name": "working.psd",
+   "path": "<root>/working.psd",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "export_profile": "sRGB IEC61966-2.1",
+   "layers": [],
+   "paths": []
+  },
+  "copy": {
+   "path": "<root>/working.psd",
+   "sha256": "<sha256>",
+   "bytes": 83,
+   "relative_path": "working.psd"
+  },
+  "source_sha256": "<sha256>",
+  "retry_safe": false,
+  "artifact": {
+   "path": "<root>/out.png",
+   "sha256": "<sha256>",
+   "bytes": 83,
+   "relative_path": "out.png",
+   "width": 1,
+   "height": 1,
+   "bit_depth": 8,
+   "removed_color_chunks": [],
+   "srgb": true,
+   "usage": "color"
+  },
+  "native_export_sha256": "<sha256>",
+  "visual_acceptance": "unreviewed",
+  "generative_operations": [],
+  "receipt": {
+   "path": "<root>/out.png.receipt.json",
+   "sha256": "<sha256>",
+   "bytes": 1290,
+   "relative_path": "out.png.receipt.json"
+  }
+ },
+ "packet": {
+  "session_id": "<hex32>",
+  "app": "photoshop",
+  "workspace": "<root>",
+  "source": "<root>/source.png",
+  "source_sha256": "<sha256>",
+  "copy": "<root>/working.psd",
+  "copy_sha256": "<sha256>",
+  "input_copy": "<root>/.adobe-authoring/source-<id>/source.png",
+  "process": {
+   "pid": 123,
+   "started": "fixture"
+  },
+  "state": "owned",
+  "ownership_token": "<hex32>",
+  "destination_reservation": "<hex32>",
+  "last_operation": {
+   "operation_id": "<hex32>",
+   "action": "export",
+   "session_id": "<hex32>",
+   "workspace": "<root>",
+   "process": {
+    "pid": 123,
+    "started": "fixture"
+   },
+   "state": "observed",
+   "diagnostics": "<tmp>/cavi-adobe-command-<id>",
+   "result": {
+    "name": "working.psd",
+    "path": "<root>/working.psd",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 1,
+    "height": 1,
+    "units": "pixels",
+    "color_profile": null,
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.EIGHT",
+    "export_profile": "sRGB IEC61966-2.1",
+    "layers": [],
+    "paths": []
+   }
+  },
+  "native_snapshot": {
+   "name": "working.psd",
+   "path": "<root>/working.psd",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 1,
+   "height": 1,
+   "units": "pixels",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "layers": [],
+   "paths": []
+  }
+ },
+ "receipt_file": {
+  "artifact": {
+   "bit_depth": 8,
+   "bytes": 83,
+   "height": 1,
+   "path": "<root>/out.png",
+   "relative_path": "out.png",
+   "removed_color_chunks": [],
+   "sha256": "<sha256>",
+   "srgb": true,
+   "usage": "color",
+   "width": 1
+  },
+  "copy": {
+   "bytes": 83,
+   "path": "<root>/working.psd",
+   "relative_path": "working.psd",
+   "sha256": "<sha256>"
+  },
+  "document": {
+   "bit_depth": "BitsPerChannelType.EIGHT",
+   "color_profile": null,
+   "color_space": "DocumentMode.RGB",
+   "export_profile": "sRGB IEC61966-2.1",
+   "height": 1,
+   "identity": "document_id_and_retained_reference",
+   "layers": [],
+   "name": "working.psd",
+   "native_id": 42,
+   "path": "<root>/working.psd",
+   "paths": [],
+   "saved": true,
+   "units": "pixels",
+   "width": 1
+  },
+  "generative_operations": [],
+  "native_export_sha256": "<sha256>",
+  "operation_id": "<hex32>",
+  "retry_safe": false,
+  "session_id": "<hex32>",
+  "source_sha256": "<sha256>",
+  "visual_acceptance": "unreviewed"
+ },
+ "close_state": "closed",
+ "close_result_keys": [
+  "session_id",
+  "operation_id",
+  "document",
+  "copy",
+  "source_sha256",
+  "retry_safe"
+ ]
+}

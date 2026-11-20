@@ -1,0 +1,130 @@
+{
+ "requests": [
+  {
+   "canvas_width": 320,
+   "canvas_height": 180,
+   "canvas_bit_depth": 16,
+   "action": "create_canvas",
+   "app": "photoshop",
+   "operation_id": "<hex32>",
+   "session_id": "<hex32>",
+   "document_path": "<root>/canvas.psd",
+   "ownership_token": "<hex32>",
+   "expected_document": null,
+   "input_copy": "<root>/.adobe-authoring/canvas-recipe-<id>/input/canvas-recipe.json",
+   "destination_reservation": "<hex32>"
+  }
+ ],
+ "result": {
+  "session_id": "<hex32>",
+  "operation_id": "<hex32>",
+  "document": {
+   "name": "canvas.psd",
+   "path": "<root>/canvas.psd",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 320,
+   "height": 180,
+   "units": "pixels",
+   "color_profile": "sRGB IEC61966-2.1",
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.SIXTEEN",
+   "export_profile": "sRGB IEC61966-2.1",
+   "layers": [],
+   "paths": []
+  },
+  "copy": {
+   "path": "<root>/canvas.psd",
+   "sha256": "<sha256>",
+   "bytes": 18,
+   "relative_path": "canvas.psd"
+  },
+  "source_sha256": "<sha256>",
+  "retry_safe": false,
+  "source_kind": "canvas_recipe",
+  "source_sha256_kind": "canvas_recipe_json",
+  "canvas_recipe": {
+   "path": "<root>/.adobe-authoring/canvas-recipe-<id>/canvas-recipe.json",
+   "sha256": "<sha256>",
+   "bytes": 178,
+   "relative_path": ".adobe-authoring/canvas-recipe-<id>/canvas-recipe.json"
+  }
+ },
+ "packet": {
+  "session_id": "<hex32>",
+  "app": "photoshop",
+  "workspace": "<root>",
+  "source": "<root>/.adobe-authoring/canvas-recipe-<id>/canvas-recipe.json",
+  "source_sha256": "<sha256>",
+  "copy": "<root>/canvas.psd",
+  "copy_sha256": "<sha256>",
+  "input_copy": "<root>/.adobe-authoring/canvas-recipe-<id>/input/canvas-recipe.json",
+  "process": {
+   "pid": 123,
+   "started": "fixture"
+  },
+  "state": "owned",
+  "ownership_token": "<hex32>",
+  "destination_reservation": "<hex32>",
+  "reservation_identity": {
+   "device": "<int>",
+   "inode": "<int>"
+  },
+  "source_kind": "canvas_recipe",
+  "last_operation": {
+   "operation_id": "<hex32>",
+   "action": "create_canvas",
+   "session_id": "<hex32>",
+   "workspace": "<root>",
+   "process": {
+    "pid": 123,
+    "started": "fixture"
+   },
+   "state": "observed",
+   "diagnostics": "<tmp>/cavi-adobe-command-<id>",
+   "result": {
+    "name": "canvas.psd",
+    "path": "<root>/canvas.psd",
+    "native_id": 42,
+    "identity": "document_id_and_retained_reference",
+    "saved": true,
+    "width": 320,
+    "height": 180,
+    "units": "pixels",
+    "color_profile": "sRGB IEC61966-2.1",
+    "color_space": "DocumentMode.RGB",
+    "bit_depth": "BitsPerChannelType.SIXTEEN",
+    "export_profile": "sRGB IEC61966-2.1",
+    "layers": [],
+    "paths": []
+   }
+  },
+  "native_snapshot": {
+   "name": "canvas.psd",
+   "path": "<root>/canvas.psd",
+   "native_id": 42,
+   "identity": "document_id_and_retained_reference",
+   "saved": true,
+   "width": 320,
+   "height": 180,
+   "units": "pixels",
+   "color_profile": "sRGB IEC61966-2.1",
+   "color_space": "DocumentMode.RGB",
+   "bit_depth": "BitsPerChannelType.SIXTEEN",
+   "layers": [],
+   "paths": []
+  }
+ },
+ "recipe": {
+  "background": "transparent",
+  "bit_depth": 16,
+  "color_profile": "sRGB IEC61966-2.1",
+  "height": 180,
+  "kind": "photoshop_canvas_recipe",
+  "mode": "RGB",
+  "resolution": 72,
+  "version": 1,
+  "width": 320
+ }
+}

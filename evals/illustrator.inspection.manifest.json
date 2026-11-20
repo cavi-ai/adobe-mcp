@@ -5,19 +5,15 @@
       "id": "status-schema",
       "probe": "output-schema",
       "access": "read_only",
-      "tool": "adobe_status",
-      "arguments": {
-        "application": "photoshop"
-      }
+      "tool": "illustrator_status",
+      "arguments": {}
     },
     {
       "id": "status-outcome",
       "probe": "instruction-fidelity",
       "access": "read_only",
-      "tool": "adobe_status",
-      "arguments": {
-        "application": "photoshop"
-      },
+      "tool": "illustrator_status",
+      "arguments": {},
       "expect": {
         "outcome": "ok",
         "equals_paths": {
@@ -31,19 +27,15 @@
       "id": "inspect-schema",
       "probe": "output-schema",
       "access": "read_only",
-      "tool": "adobe_inspect",
-      "arguments": {
-        "application": "photoshop"
-      }
+      "tool": "illustrator_inspect",
+      "arguments": {}
     },
     {
       "id": "inspect-outcome",
       "probe": "instruction-fidelity",
       "access": "read_only",
-      "tool": "adobe_inspect",
-      "arguments": {
-        "application": "photoshop"
-      },
+      "tool": "illustrator_inspect",
+      "arguments": {},
       "expect": {
         "outcome": "ok",
         "equals_paths": {
@@ -56,43 +48,14 @@
       }
     },
     {
-      "id": "generative-fill-rejects-bounds",
+      "id": "export-rejects-kind",
       "probe": "instruction-fidelity",
       "access": "read_only",
-      "tool": "adobe_generative_fill",
+      "tool": "illustrator_export",
       "arguments": {
-        "application": "photoshop",
         "session_id": "unused",
-        "prompt": "sky",
-        "bounds": [0, 0, 10]
-      },
-      "expect": {
-        "outcome": "error"
-      }
-    },
-    {
-      "id": "remove-background-rejects-layer-path",
-      "probe": "instruction-fidelity",
-      "access": "read_only",
-      "tool": "adobe_remove_background",
-      "arguments": {
-        "application": "photoshop",
-        "session_id": "unused",
-        "layer_path": [],
-        "expected_name": "Layer 1"
-      },
-      "expect": {
-        "outcome": "error"
-      }
-    },
-    {
-      "id": "generative-upscale-rejects-application",
-      "probe": "instruction-fidelity",
-      "access": "read_only",
-      "tool": "adobe_generative_upscale",
-      "arguments": {
-        "application": "illustrator",
-        "session_id": "unused"
+        "destination": "out.svg",
+        "kind": "jpeg"
       },
       "expect": {
         "outcome": "error"
@@ -105,10 +68,8 @@
       "repetitions": 3,
       "steps": [
         {
-          "tool": "adobe_status",
-          "arguments": {
-            "application": "photoshop"
-          },
+          "tool": "illustrator_status",
+          "arguments": {},
           "expect": {
             "outcome": "ok",
             "equals_paths": {
@@ -119,10 +80,8 @@
           }
         },
         {
-          "tool": "adobe_inspect",
-          "arguments": {
-            "application": "photoshop"
-          },
+          "tool": "illustrator_inspect",
+          "arguments": {},
           "expect": {
             "outcome": "ok",
             "equals_paths": {
@@ -135,10 +94,8 @@
           }
         },
         {
-          "tool": "adobe_status",
-          "arguments": {
-            "application": "photoshop"
-          },
+          "tool": "illustrator_status",
+          "arguments": {},
           "expect": {
             "outcome": "ok",
             "equals_paths": {

@@ -11,13 +11,15 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVERS = ("authoring", "animate", "dimension")
+SERVERS = ("photoshop", "illustrator", "animate", "dimension")
 BACKGROUND_TOOLS = {
     # Document inspection selects native documents internally; status only is background-safe.
-    "authoring": frozenset({"adobe_status"}),
+    "photoshop": frozenset({"photoshop_status"}),
+    "illustrator": frozenset({"illustrator_status"}),
     "animate": frozenset({"animate_status"}),
     "dimension": frozenset({"dimension_status", "dimension_inspect"}),
 }
+BACKGROUND_SUFFIX = frozenset({"photoshop", "illustrator", "animate"})
 
 
 def background_manifest(server, manifest):
@@ -42,7 +44,7 @@ def main():
     args = parser.parse_args()
     if args.mode == "native-background":
         for server in SERVERS:
-            suffix = "background" if server in {"authoring", "animate"} else "inspection"
+            suffix = "background" if server in BACKGROUND_SUFFIX else "inspection"
             background_manifest(server, json.loads(
                 (ROOT / f"evals/{server}.{suffix}.manifest.json").read_text()))
     selected = os.environ.get("MCPEVAL_EXECUTABLE", str(ROOT / "node_modules/.bin/mcpeval"))
@@ -72,7 +74,7 @@ def main():
         for mode in modes:
             for server in SERVERS:
                 suffix = "" if mode == "protocol" else ".inspection"
-                if mode == "native-background" and server in {"authoring", "animate"}:
+                if mode == "native-background" and server in BACKGROUND_SUFFIX:
                     suffix = ".background"
                 command = ([str(ROOT / "evals/simulated_server.py"), server] if mode == "simulated"
                            else ["-m", f"cavi_adobe_mcp.{server}.server"])

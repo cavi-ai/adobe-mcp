@@ -26,7 +26,7 @@ Generative Fill and Generative Upscale send pixels to Adobe and spend generative
 Cloud account. The tool annotations mark both as open-world. Remove Background adds a layer mask to one layer of the
 owned copy.
 
-- Connect a client to the authoring server only if you accept that it can start these calls and spend credits.
+- Connect a client to the Photoshop server only if you accept that it can start these calls and spend credits.
 - Prompts are limited to 1000 printable characters, and the call has a 120 second limit.
 - The server does not sign in, accept terms or acknowledge Photoshop's one-time Generative Credits notice. You
   acknowledge it in the application. Until then a call times out with an unknown outcome.
