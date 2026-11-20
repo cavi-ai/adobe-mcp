@@ -39,6 +39,8 @@ Each larger application has its own package. Install the ones you use.
 - Animate also uses a small native helper compiled on first use,
   which needs the Swift command-line compiler (`xcode-select --install`) and existing
   Accessibility access.
+- Dimension also uses a Swift helper compiled on first use, which needs the same compiler and existing
+  Accessibility, Screen Recording and input-event access.
 - `ffmpeg` and `ffprobe` on `PATH` or in Homebrew's directory for review movies.
 
 ## Install
@@ -82,8 +84,8 @@ with the application's bundle identifier. An override is final: one that names a
 application is refused with `APP_IDENTITY_MISMATCH`. Dimension is driven only at
 `/Applications/Adobe Dimension/Adobe Dimension.app`.
 
-Ownership records live inside the workspace (`.adobe-authoring/`, `.animate-authoring/`);
-keep them private.
+Ownership records live inside the workspace (`.adobe-authoring/`, `.animate-authoring/`,
+`.dimension-authoring/`); keep them private.
 
 <details>
 <summary>Application reference</summary>
@@ -103,6 +105,11 @@ uv run --locked ruff check .
 ```
 
 Evaluation configuration is in [evals](evals/).
+
+## Documentation
+
+Product documentation is in [docs/adobe-mcp/source](docs/adobe-mcp/source/). Build and verify it with
+`uv run --locked python -m scripts.docs.build` and `uv run --locked python -m scripts.docs.verify`.
 
 ## License
 

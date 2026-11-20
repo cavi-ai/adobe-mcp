@@ -1,0 +1,66 @@
+{
+  "title": "Cavi Adobe MCP",
+  "version": "{{PRODUCT_VERSION}}",
+  "sections": [
+    {
+      "title": "Introduction",
+      "pages": [
+        { "title": "Overview", "path": "introduction/overview.md" },
+        { "title": "Installation", "path": "introduction/installation.md" },
+        { "title": "Quickstart", "path": "introduction/quickstart.md" }
+      ]
+    },
+    {
+      "title": "Photoshop and Illustrator",
+      "pages": [
+        { "title": "Tools", "path": "photoshop-illustrator/tools.md" },
+        { "title": "Generative tools", "path": "photoshop-illustrator/generative.md" },
+        { "title": "Owned copies", "path": "photoshop-illustrator/owned-copies.md" },
+        { "title": "Exports and receipts", "path": "photoshop-illustrator/exports-and-receipts.md" }
+      ]
+    },
+    {
+      "title": "Animate",
+      "pages": [
+        { "title": "Tools", "path": "animate/tools.md" },
+        { "title": "Timelines and frames", "path": "animate/timelines-and-frames.md" }
+      ]
+    },
+    {
+      "title": "Dimension",
+      "pages": [
+        { "title": "Tools", "path": "dimension/tools.md" },
+        { "title": "Renders", "path": "dimension/renders.md" }
+      ]
+    },
+    {
+      "title": "Guides",
+      "pages": [
+        { "title": "Review movies", "path": "guides/review-movies.md" },
+        { "title": "Handoffs", "path": "guides/handoffs.md" },
+        { "title": "Recovery and unknown outcomes", "path": "guides/recovery.md" },
+        { "title": "Troubleshooting", "path": "guides/troubleshooting.md" }
+      ]
+    },
+    {
+      "title": "Reference",
+      "pages": [
+        { "title": "Configuration", "path": "reference/configuration.md" },
+        { "title": "Results and errors", "path": "reference/results-and-errors.md" },
+        { "title": "Testing and evaluation", "path": "reference/testing.md" }
+      ]
+    },
+    {
+      "title": "Security",
+      "pages": [
+        { "title": "Security model", "path": "security/model.md" }
+      ]
+    },
+    {
+      "title": "Release",
+      "pages": [
+        { "title": "Version and support", "path": "release/version-and-support.md" }
+      ]
+    }
+  ]
+}
