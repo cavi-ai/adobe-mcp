@@ -151,12 +151,12 @@ jobs:
       - name: Send the release to cavi-home
         if: ${{ !github.event.repository.private }}
         env:
-          GH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.CAVI_DISPATCH_TOKEN }}
           ENVELOPE: ${{ steps.artifact.outputs.envelope }}
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
-            echo "::error::CONSUMER_DISPATCH_TOKEN is required"
+            echo "::error::CAVI_DISPATCH_TOKEN is required"
             exit 1
           fi
           jq -c '{event_type: "cavi-oss-release", client_payload: .}' "$ENVELOPE" > "$RUNNER_TEMP/payload.json"

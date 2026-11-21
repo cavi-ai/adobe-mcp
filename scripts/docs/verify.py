@@ -1,6 +1,8 @@
 """Verify that built documentation is complete and matches its manifest."""
 
 import json
+import posixpath
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +18,9 @@ from .lib import (
     release_input,
     resolve_release_identity,
 )
+
+PAGE_LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+EXTERNAL_LINK = re.compile(r"(?:[a-z]+:|/)", re.IGNORECASE)
 
 
 def verify_documentation(values=None):
@@ -45,9 +50,23 @@ def verify_documentation(values=None):
         if not (root / page).is_file():
             raise ValueError(f"navigation path is not a file: {page}")
     for relative in paths:
-        if UNRESOLVED_TOKEN.search((root / relative).read_text(encoding="utf-8")):
+        text = (root / relative).read_text(encoding="utf-8")
+        if UNRESOLVED_TOKEN.search(text):
             raise ValueError(f"unresolved template token in {relative}")
+        if relative.endswith(".md"):
+            _check_links(relative, text, set(paths))
     return manifest
+
+
+def _check_links(page, text, paths):
+    """A relative link names a file of the built documentation."""
+    for target in PAGE_LINK.findall(text):
+        target = target.split("#", 1)[0].split("?", 1)[0]
+        if not target or EXTERNAL_LINK.match(target):
+            continue
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(page), target))
+        if resolved not in paths:
+            raise ValueError(f"link in {page} names no documentation file: {target}")
 
 
 def main(argv=None):

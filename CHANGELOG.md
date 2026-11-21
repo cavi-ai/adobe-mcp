@@ -4,6 +4,12 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+### Fixed
+
+- The Photoshop and Illustrator tool pages link to Results and errors inside the documentation.
+- The documentation check refuses a page link that names no documentation file.
+- The release sends the documentation to cavi-home with the `CAVI_DISPATCH_TOKEN` secret.
+
 ## 0.6.0 - 2026-11-21
 
 ### Added
