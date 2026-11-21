@@ -4,6 +4,8 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+## 0.6.0 - 2026-11-21
+
 ### Added
 
 - `photoshop_generative_fill` generates a new Photoshop layer from a prompt inside pixel bounds or across the canvas.
