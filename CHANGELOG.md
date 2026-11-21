@@ -4,6 +4,8 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
+## 0.6.1 - 2026-11-21
+
 ### Fixed
 
 - The Photoshop and Illustrator tool pages link to Results and errors inside the documentation.
