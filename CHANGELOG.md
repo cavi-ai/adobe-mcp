@@ -25,6 +25,7 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 - The `adobe_*` tools are now `photoshop_*` on the Photoshop server and `illustrator_*` on the Illustrator server; the Illustrator group tool is `illustrator_add_layer`.
 - `media_review_movie` is served by the Animate server.
+- Modules are grouped by application: `cavi_adobe_mcp.photoshop`, `.illustrator`, `.animate` and `.dimension`, with shared code in `.core` and frame and movie code in `.media`.
 - Requires `cavi-mcp-core[media]` 0.1.8; the workspace root, path confinement, file digests, file locks, bounded commands, program lookup, private record reads and scratch removal come from it.
 - A timed-out `osascript`, `open`, `swiftc` or native helper command is stopped with every process it started.
 - Tool results are built on the `cavi-mcp-core` `Result` model: an optional field the tool did not set is left out instead of sent as `null`.
@@ -33,7 +34,6 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 ### Fixed
 
 - `media_review_movie` finds `ffmpeg` and `ffprobe` where Homebrew installs them when the server's `PATH` leaves that directory out.
-- An interrupted Character Animator helper call stops the processes the helper started, not only the helper.
 - The 0.4.0 section lists four Character Animator fixes that were filed under a second Unreleased heading.
 
 ## 0.5.0 - 2026-11-16
