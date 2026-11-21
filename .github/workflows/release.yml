@@ -14,7 +14,8 @@ concurrency:
 jobs:
   build:
     name: verify and build
-    runs-on: ubuntu-latest
+    # The tests run on the image the CI unit job uses; the package is macOS-only.
+    runs-on: macos-26-intel
     timeout-minutes: 15
     permissions:
       contents: read
