@@ -10,7 +10,7 @@ marked `*` is required. Units are points, measured from the top left.
 - Layer, path and font names are 1 to 128 printable characters.
 - A locked layer or group that an edit targets is refused.
 - Every tool that changes a document works on an owned copy named by `session_id`, and returns the mutation result
-  described in [Results and errors](../../reference/results-and-errors.md).
+  described in [Results and errors](../reference/results-and-errors.md).
 - Illustrator accepts one command at a time. A second call while one runs is refused.
 - Commands time out after 45 seconds. A timeout is an unknown outcome.
 
