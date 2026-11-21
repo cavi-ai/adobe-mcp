@@ -4,14 +4,6 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 ## Unreleased
 
-## 0.6.1 - 2026-11-21
-
-### Fixed
-
-- The Photoshop and Illustrator tool pages link to Results and errors inside the documentation.
-- The documentation check refuses a page link that names no documentation file.
-- The release sends the documentation to cavi-home with the `CAVI_DISPATCH_TOKEN` secret.
-
 ## 0.6.0 - 2026-11-21
 
 ### Added
@@ -45,6 +37,9 @@ Versions come from git tags; a pull request adds its lines under Unreleased and 
 
 - `media_review_movie` finds `ffmpeg` and `ffprobe` where Homebrew installs them when the server's `PATH` leaves that directory out.
 - The 0.4.0 section lists four Character Animator fixes that were filed under a second Unreleased heading.
+- The Photoshop and Illustrator tool pages link to Results and errors inside the documentation.
+- The documentation check refuses a page link that names no documentation file.
+- The release sends the documentation to cavi-home with the `CAVI_DISPATCH_TOKEN` secret.
 
 ## 0.5.0 - 2026-11-16
 
