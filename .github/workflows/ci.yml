@@ -111,24 +111,22 @@ jobs:
         env:
           TOKEN: ${{ secrets.CAVI_DISPATCH_TOKEN }}
         run: test -n "$TOKEN" || { echo "::error::Add the CAVI_DISPATCH_TOKEN repository secret"; exit 1; }
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: cavi-ai/${{ matrix.consumer }}
-          token: ${{ secrets.CAVI_DISPATCH_TOKEN }}
-          submodules: true
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.15"
-      - name: Server access for uv
+      - name: Check out the consumer
         env:
           TOKEN: ${{ secrets.CAVI_DISPATCH_TOKEN }}
-        run: git config --global url."https://x-access-token:${TOKEN}@github.com/cavi-ai/".insteadOf "https://github.com/cavi-ai/"
+          CONSUMER: ${{ matrix.consumer }}
+        # Consumer output stays out of this repository's logs.
+        run: |
+          git config --global url."https://x-access-token:${TOKEN}@github.com/cavi-ai/".insteadOf "https://github.com/cavi-ai/"
+          git clone -q --recurse-submodules "https://github.com/cavi-ai/$CONSUMER" consumer > /dev/null 2>&1
       - name: Open the pin pull request
+        working-directory: consumer
         env:
           GH_TOKEN: ${{ secrets.CAVI_DISPATCH_TOKEN }}
           CONSUMER: ${{ matrix.consumer }}
-        # Consumer output stays out of this repository's logs.
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/pin-body.md"
